@@ -1,104 +1,149 @@
-# CloudLog Architecture & Design Decisions
+# CloudLog Architecture & Design Specifications
 
-This document records the architectural design, system models, and Architectural Decision Records (ADRs) for the **CloudLog** platform.
+This document outlines the architecture, data models, operational flows, and Architectural Decision Records (ADRs) for the CloudLog platform.
 
 ---
 
 ## 1. System Overview
 
-CloudLog is an event-driven, cloud-native log analysis and incident detection platform built on AWS serverless technologies.
+CloudLog is designed as a serverless event-driven pipeline that handles ingestion, parsing, indexing, and incident escalation for distributed application logs on AWS.
 
 ```text
-[Application / Server / Generator]
-                │
-                ▼ (Structured JSON Logs)
-       [Amazon S3 Bucket]
-                │
-                ▼ (ObjectCreated Event Trigger)
-       [AWS Lambda: Log Processor]
-                │
-                ├──► [Python Analyzer: Parse, Validate, Classify]
-                │
-                ├──► [Amazon DynamoDB: cloudlog_events Table]
-                │
-                ├──► [Amazon DynamoDB: cloudlog_incidents Table (if Warning/Error/Critical)]
-                │
-                └──► [Amazon SNS Topic: Critical Incident Alerts (if Severity == CRITICAL)]
-
-[Dashboard / Client] ──► [API Gateway] ──► [AWS Lambda: API Handler] ──► [DynamoDB Tables]
+[Application / Microservices]
+         │
+         │ (1) PutObject (.json / .jsonl)
+         ▼
+ ┌───────────────┐
+ │   Amazon S3   │
+ └───────┬───────┘
+         │ (2) s3:ObjectCreated:* Event
+         ▼
+ ┌───────────────┐
+ │  AWS Lambda   │◄── Ingestion & Extraction (backend/ingestion)
+ │ Log Processor │──► Validation & Parsing    (backend/analyzer)
+ └───────┬───────┘──► Incident Creation       (backend/incidents)
+         │
+         ├───────────────────────────────┬───────────────────────────────┐
+         │ (3a) All Events               │ (3b) Errors / Critical        │ (3c) Critical / Security Only
+         ▼                               ▼                               ▼
+ ┌───────────────┐               ┌───────────────┐               ┌───────────────┐
+ │   DynamoDB    │               │   DynamoDB    │               │  Amazon SNS   │
+ │cloudlog_events│               │  cloudlog_    │               │Critical Alerts│
+ └───────┬───────┘               │   incidents   │               └───────────────┘
+         │                       └───────┬───────┘
+         │                               │
+         └───────────────┬───────────────┘
+                         │
+                         ▼ (4) Query API
+                 ┌───────────────┐
+                 │  API Gateway  │
+                 │       +       │
+                 │  AWS Lambda   │
+                 └───────────────┘
 ```
 
 ---
 
-## 2. Architectural Decision Records (ADRs)
+## 2. Pipeline Components
 
-### ADR 001: Log Ingestion Format
-* **Date:** Phase 1 Design
-* **Status:** `ACCEPTED`
-* **Decision:** Accept **Structured JSON logs only** for the MVP.
-* **Context & Rationale:**
-  * Modern cloud-native and containerized workloads primarily emit structured JSON logs.
-  * Ensures deterministic parsing and strict schema validation.
-  * Minimizes brittle regular expression edge cases and reduces unnecessary parsing overhead.
-  * Significantly reduces development time, fitting the 3–5 week course timeline.
-* **Deferred Feature:** Multi-format/Regex fallback parser (Apache, Syslog, raw text) is documented as a future stretch goal if time permits after the core system is verified.
+### 2.1 Ingestion Layer (`backend/ingestion`)
+- **Trigger**: S3 bucket notification invokes the Log Processor Lambda upon new file arrival (`s3:ObjectCreated:*`).
+- **File Handling**: Supports both individual JSON objects and line-delimited JSON (`.jsonl`).
+- **Payload Extraction**: Downloads the file stream from S3, splits line records, and passes them to the analyzer.
 
----
+### 2.2 Analysis & Classification (`backend/analyzer`)
+- **Schema Validation**: Validates that incoming records contain required fields (`timestamp`, `service_name`, `log_level`, `message`).
+- **Sanitization**: Normalizes timestamps to ISO 8601 UTC and trims noisy payloads.
+- **Classification**: Determines severity levels (`INFO`, `WARNING`, `ERROR`, `CRITICAL`, `SECURITY`) and classifies error codes.
 
-### ADR 002: Persistence Strategy & Database Design
-* **Date:** Phase 1 Design
-* **Status:** `ACCEPTED`
-* **Decision:** Adopt a **Two-Table DynamoDB Design** (`cloudlog_events` and `cloudlog_incidents`).
-* **Context & Rationale:**
-  * High-frequency telemetry (raw/parsed log events) and actionable low-frequency operational entities (incidents) have distinct lifecycle and query patterns.
-  * **Table 1: `cloudlog_events`**
-    * *Partition Key (PK):* `service_name` (String)
-    * *Sort Key (SK):* `timestamp` (String / ISO 8601)
-    * *Purpose:* Time-series log querying per microservice / subsystem.
-  * **Table 2: `cloudlog_incidents`**
-    * *Partition Key (PK):* `incident_id` (String - e.g. `INC-20260825-001`)
-    * *Sort Key (SK):* `created_at` (String / ISO 8601)
-    * *GSI 1 (Optional for API):* `status` (PK) + `created_at` (SK) for listing `OPEN`/`RESOLVED` incidents.
-    * *Purpose:* Managing actionable incident lifecycles, states, and escalations.
-  * **Why not Single-Table Design for MVP:** Single-table designs add cognitive overhead and indexing complexity that is difficult to justify and explain within a 3–5 week student semester project. Two tables are clean, maintainable, and viva-friendly.
+### 2.3 Incident Management & Escalation (`backend/incidents`)
+- **Incident Deduplication & Creation**: Any log with severity `ERROR`, `CRITICAL`, or `SECURITY` generates a dedicated incident record with status `OPEN`.
+- **Notification Dispatch**: Logs classified as `CRITICAL` or `SECURITY` immediately publish structured alert payloads to the configured Amazon SNS topic.
+
+### 2.4 Query API (`backend/api`)
+- Provides REST endpoints via API Gateway and Lambda for querying logs by service/time range and viewing active incidents.
 
 ---
 
-### ADR 003: Local Development & Emulation Strategy
-* **Date:** Phase 1 Design
-* **Status:** `ACCEPTED`
-* **Decision:** Utilize **`pytest` + `moto`** with local JSON event fixtures for automated local development and testing.
-* **Context & Rationale:**
-  * `moto` provides fast, in-memory AWS service mocking without requiring Docker containers or heavy background daemons.
-  * Unit and integration tests can run entirely offline in milliseconds and seamlessly in GitHub Actions CI.
-  * Eliminates configuration debugging time associated with local emulation containers.
-* **Deferred Feature:** LocalStack integration is retained as an optional local simulation bonus after the core pipeline and tests are stable.
+## 3. Data Storage & Schema Design
+
+DynamoDB is used for persistence with a dual-table strategy to isolate high-throughput append-only logs from stateful incident tracking.
+
+### Table 1: `cloudlog_events`
+Stores all validated log records for historical querying and auditing.
+
+| Attribute | Type | Key Type | Description |
+| :--- | :--- | :--- | :--- |
+| `service_name` | String | **Partition Key (PK)** | Identifies the originating service (e.g. `payment-service`) |
+| `timestamp` | String | **Sort Key (SK)** | ISO 8601 timestamp (e.g. `2026-08-25T14:31:05.412Z`) |
+| `event_id` | String | Attribute | Unique UUID for the log entry |
+| `log_level` | String | Attribute | `INFO`, `WARNING`, `ERROR`, `CRITICAL`, `SECURITY` |
+| `message` | String | Attribute | Human-readable log message |
+| `error_code` | String | Attribute | Optional error identifier (e.g. `PGW_TIMEOUT_504`) |
+| `ip_address` | String | Attribute | Origin IP address |
+| `endpoint` | String | Attribute | HTTP route or internal RPC endpoint |
+| `metadata` | Map | Attribute | Arbitrary context (user IDs, request IDs, latencies) |
+| `ttl` | Number | TTL Attribute | Unix timestamp for automatic item expiration (e.g. 30 days) |
+
+### Table 2: `cloudlog_incidents`
+Stores actionable operational anomalies and security events.
+
+| Attribute | Type | Key Type | Description |
+| :--- | :--- | :--- | :--- |
+| `incident_id` | String | **Partition Key (PK)** | Unique incident identifier (e.g. `INC-20260825-4F8A`) |
+| `created_at` | String | **Sort Key (SK)** | ISO 8601 creation timestamp |
+| `service_name` | String | Attribute | Originating service |
+| `severity` | String | Attribute | `ERROR`, `CRITICAL`, or `SECURITY` |
+| `status` | String | Attribute | `OPEN`, `INVESTIGATING`, `RESOLVED` |
+| `error_code` | String | Attribute | Associated error code |
+| `message` | String | Attribute | Root cause error message |
+| `source_event_id`| String | Attribute | Pointer to the corresponding record in `cloudlog_events` |
+| `resolved_at` | String | Attribute | ISO 8601 resolution timestamp |
 
 ---
 
-## 3. Standard JSON Log Schema (MVP Contract)
+## 4. Architectural Decision Records (ADRs)
 
-Every log file uploaded to S3 contains JSON records (single object or newline-delimited JSON `.jsonl`) conforming to the following structure:
+### ADR-001: Event-Driven S3 Ingestion vs. Continuous Streaming
+* **Status**: Accepted
+* **Context**: We evaluated whether to ingest logs via streaming (Amazon Kinesis Data Streams / Apache Kafka) or file uploads to Amazon S3 with event notifications.
+* **Decision**: Use S3 bucket notifications triggering AWS Lambda.
+* **Rationale**:
+  * For batch log uploads and services writing buffered log chunks, S3 event notifications provide a zero-maintenance, zero-idle-cost ingestion path.
+  * Avoids paying hourly shard costs for Kinesis streams during low-traffic periods.
+  * The S3 bucket automatically serves as a durable, raw log archive.
 
-```json
-{
-  "timestamp": "2026-08-25T14:30:00.123Z",
-  "service_name": "payment-service",
-  "log_level": "ERROR",
-  "message": "Payment gateway timeout after 5000ms",
-  "error_code": "PGW_TIMEOUT_504",
-  "ip_address": "192.168.1.45",
-  "endpoint": "/api/v1/checkout",
-  "metadata": {
-    "user_id": "usr_99812",
-    "retry_count": 3
-  }
-}
-```
+### ADR-002: Dual-Table DynamoDB Modeling vs. Single-Table Design
+* **Status**: Accepted
+* **Context**: We evaluated using a single overloaded DynamoDB table with composite keys (`PK`, `SK`, `GSI1PK`, `GSI1SK`) versus two distinct tables (`cloudlog_events` and `cloudlog_incidents`).
+* **Decision**: Adopt a two-table design.
+* **Rationale**:
+  * `cloudlog_events` is a high-volume, append-only time-series dataset that benefits from a short Time-To-Live (TTL) expiration policy.
+  * `cloudlog_incidents` is a low-volume, mutable dataset that requires updates to lifecycle status (`OPEN` → `RESOLVED`) and longer-term retention.
+  * Separating them prevents high log volumes from impacting incident queries and allows independent capacity and TTL configuration.
 
-### Supported Severity Levels:
-1. `INFO` — Informational operational messages (stored in `cloudlog_events`).
-2. `WARNING` — Potential anomalies or degraded performance (stored in `cloudlog_events`, optionally flagged).
-3. `ERROR` — Application faults/exceptions (stored in `cloudlog_events`, triggers incident in `cloudlog_incidents`).
-4. `CRITICAL` — Severe outages, database connection drops, fatal service crashes (stored in `cloudlog_events`, creates `cloudlog_incidents`, triggers **SNS alert**).
-5. `SECURITY` — Authentication failures, unauthorized access attempts (classified and tracked as security incidents).
+### ADR-003: Structured JSON as the Canonical Format
+* **Status**: Accepted
+* **Context**: Applications produce logs in multiple formats (raw plaintext, standard Syslog, Apache combined format, JSON).
+* **Decision**: Require structured JSON (single object or newline-delimited JSON `.jsonl`) as the initial ingestion contract.
+* **Rationale**:
+  * Eliminates complex, fragile regular expression parsing in the core Lambda path.
+  * Enforces predictable schemas with typed metadata (e.g. integer latencies, structured user context).
+  * Custom format adaptors can be added later as pre-processors without altering the core analyzer engine.
+
+### ADR-004: In-Memory Offline Testing with Moto
+* **Status**: Accepted
+* **Context**: Testing serverless AWS architectures often requires either deploying to real AWS test accounts or running heavy containerized emulators (like LocalStack).
+* **Decision**: Use Python `pytest` alongside `moto` for local testing.
+* **Rationale**:
+  * Complete test suite runs in under 2 seconds without network access or cloud credentials.
+  * Integrates seamlessly into CI pipelines without container startup delays.
+  * Mock coverage for S3, DynamoDB, and SNS in `moto` matches AWS API behavior accurately for our use cases.
+
+---
+
+## 5. Reliability & Error Handling
+
+1. **Malformed Payloads**: If a file in S3 contains corrupted or unparseable JSON lines, the parser logs a warning, skips the invalid line, and continues processing the remainder of the file.
+2. **Idempotency**: Event IDs are generated deterministically based on `service_name + timestamp + message hash` or UUIDs to prevent duplicate record insertion during S3 event retries.
+3. **Dead Letter Queues (DLQ)**: In production deployment, unhandled Lambda execution failures will route to an Amazon SQS DLQ for inspection and reprocessing.
