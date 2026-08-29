@@ -156,6 +156,3 @@ CloudLog components are configured using standard environment variables:
 
 ---
 
-## License
-
-This project is licensed under the MIT License.
