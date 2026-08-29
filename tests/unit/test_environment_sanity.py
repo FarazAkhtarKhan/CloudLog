@@ -9,7 +9,6 @@ from backend.common.config import (
     SEVERITY_WARNING,
     SEVERITY_ERROR,
     SEVERITY_CRITICAL,
-    SEVERITY_SECURITY,
     VALID_SEVERITIES,
     DEFAULT_EVENTS_TABLE,
     DEFAULT_INCIDENTS_TABLE,
@@ -24,13 +23,11 @@ def test_config_defaults():
     assert SEVERITY_WARNING == "WARNING"
     assert SEVERITY_ERROR == "ERROR"
     assert SEVERITY_CRITICAL == "CRITICAL"
-    assert SEVERITY_SECURITY == "SECURITY"
-    assert len(VALID_SEVERITIES) == 5
+    assert len(VALID_SEVERITIES) == 4
     assert DEFAULT_EVENTS_TABLE == "cloudlog_events"
     assert DEFAULT_INCIDENTS_TABLE == "cloudlog_incidents"
     assert get_events_table_name() == "cloudlog_events_test"
     assert get_incidents_table_name() == "cloudlog_incidents_test"
-
 
 
 def test_sample_log_fixtures_schema():
@@ -42,12 +39,12 @@ def test_sample_log_fixtures_schema():
         events = json.load(f)
 
     assert isinstance(events, list)
-    assert len(events) == 5
+    assert len(events) == 4
 
-    required_keys = {"timestamp", "service_name", "log_level", "message"}
+    required_keys = {"timestamp", "service", "level", "message"}
 
     for event in events:
         assert required_keys.issubset(event.keys()), f"Event missing required keys: {event}"
-        assert event["log_level"] in VALID_SEVERITIES, f"Invalid log level: {event['log_level']}"
-        assert isinstance(event["service_name"], str)
+        assert event["level"] in VALID_SEVERITIES, f"Invalid log level: {event['level']}"
+        assert isinstance(event["service"], str)
         assert isinstance(event["message"], str)

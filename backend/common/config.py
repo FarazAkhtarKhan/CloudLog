@@ -7,20 +7,19 @@ DEFAULT_AWS_REGION = "us-east-1"
 DEFAULT_EVENTS_TABLE = "cloudlog_events"
 DEFAULT_INCIDENTS_TABLE = "cloudlog_incidents"
 
-# Log Severity Classifications
+# Log Severity Classifications (MVP)
 SEVERITY_INFO = "INFO"
 SEVERITY_WARNING = "WARNING"
 SEVERITY_ERROR = "ERROR"
 SEVERITY_CRITICAL = "CRITICAL"
-SEVERITY_SECURITY = "SECURITY"
 
 VALID_SEVERITIES = {
     SEVERITY_INFO,
     SEVERITY_WARNING,
     SEVERITY_ERROR,
     SEVERITY_CRITICAL,
-    SEVERITY_SECURITY,
 }
+
 
 
 def get_aws_region() -> str:
