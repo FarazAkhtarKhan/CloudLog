@@ -198,6 +198,8 @@ The CloudLog API exposes RESTful endpoints backed by a single Lambda controller 
 | `GET` | `/incidents` | Yes | Admin, Analyst, Viewer | Operational incidents with `status` filter |
 | `GET` | `/incidents/{id}` | Yes | Admin, Analyst, Viewer | Detailed inspection of a specific incident |
 | `PATCH` | `/incidents/{id}` | Yes | **Admin, Analyst only** | Lifecycle transition from `OPEN` to `RESOLVED` |
+| `POST` | `/simulate` | Yes | **Admin, Analyst only** | Uploads a simulated `.jsonl` log directly to S3 to trigger pipeline |
+
 
 ---
 
@@ -218,6 +220,8 @@ Access control is enforced at two distinct security perimeters:
 * **Styling:** Custom Vanilla CSS with dark-mode glassmorphic aesthetics, responsive grid layouts, and color-coded severity badges.
 * **Session Management:** Secure browser `sessionStorage` containing Cognito JWT `IdToken`.
 * **Real-Time Experience:** 10-second polling interval with manual refresh option and live animated state badges.
+* **In-Browser Incident Simulator:** Built-in modal with 1-click presets allowing evaluators to inject logs to Amazon S3 directly from the browser, triggering real-time incident analysis and SNS alerts without CLI tools.
+
 
 ---
 
