@@ -1,51 +1,54 @@
 # CloudLog
 
-CloudLog is an event-driven log processing and automated incident detection pipeline built with AWS serverless services. It ingests structured application logs uploaded to Amazon S3, parses and validates them via AWS Lambda, indexes events in DynamoDB, and dispatches real-time alerts via Amazon SNS when high-severity anomalies or failures are detected.
+> **Serverless Critical Log Analysis and Incident Detection System**
+
+CloudLog is an event-driven, production-grade cloud telemetry pipeline and operational incident management dashboard built entirely on AWS serverless services. Designed for modern microservice architectures, CloudLog replaces heavy, expensive logging clusters (e.g. Elasticsearch/OpenSearch) with a zero-idle-cost serverless architecture that ingests structured application logs, extracts deterministic event telemetry, detects high-severity incidents in real time, publishes instant notifications via Amazon SNS, and provides an authenticated Single Page Application (SPA) dashboard backed by AWS Cognito and Amazon API Gateway.
 
 ---
 
-## Why CloudLog?
+## Key Features
 
-Managing dedicated logging clusters (like Elasticsearch or OpenSearch) introduces ongoing infrastructure costs, cluster management overhead, and capacity planning. 
-
-CloudLog provides a lightweight, cost-effective alternative for cloud-native applications:
-- **Zero Idle Cost**: Built purely on serverless components (S3, Lambda, DynamoDB, SNS).
-- **Automated Incident Tracking**: Automatically separates raw telemetry from actionable operational/security incidents.
-- **Immediate Escalation**: Sends instant push notifications for critical errors and security anomalies.
-- **Fast Offline Development**: Includes an in-memory test suite powered by `moto`, enabling offline testing without cloud credentials or heavy emulator containers.
+- **Zero Idle Infrastructure Cost:** Built 100% on AWS Free Tier serverless primitives (S3, Lambda, DynamoDB, API Gateway HTTP API, Cognito, SNS, CloudWatch).
+- **Deterministic Event Idempotency:** Derives unique SHA-256 event fingerprints (`evt_<hash>`) based on S3 object keys and line offsets, guaranteeing safe at-least-once execution and zero duplicate records across Lambda retries.
+- **Automated Incident Escalation:** Segregates routine application telemetry (`INFO`, `WARNING`) from actionable incidents (`ERROR`, `CRITICAL`), dispatching immediate push notifications for critical outages while tracking incident lifecycles (`OPEN` $\rightarrow$ `RESOLVED`).
+- **Role-Based Access Control (RBAC):** Cognito User Pools enforce granular role hierarchies (`Admin`, `Analyst`, `Viewer`) validated via native API Gateway JWT authorizers and Lambda security policies.
+- **Modern Operations Dashboard:** React 19 + Vite dashboard featuring dark-mode glassmorphic aesthetics, live 10-second polling, interactive incident queue, and system-wide telemetry distribution breakdowns.
+- **Offline Development & In-Memory Testing:** 68 comprehensive unit and integration tests executing with `pytest` and `moto` in under 4 seconds without cloud credentials or heavy Docker emulator overhead.
+- **Production IaC Automation:** Flat, declarative Terraform architecture for reproducible provisioning, live verification, and 1-command zero-residual billing teardown (`terraform destroy`).
 
 ---
 
-## Architecture
+## System Architecture
 
 ```text
-                        ┌─────────────────────────────────────────┐
-                        │      Application / Microservices        │
-                        └────────────────────┬────────────────────┘
-                                             │ (Writes .json / .jsonl)
-                                             ▼
-                                  ┌────────────────────┐
-                                  │  Amazon S3 Bucket  │
-                                  │   (Log Storage)    │
-                                  └──────────┬─────────┘
-                                             │ (ObjectCreated Notification)
-                                             ▼
-                                  ┌────────────────────┐
-                                  │     AWS Lambda     │
-                                  │  (Log Processor)   │
-                                  └──────────┬─────────┘
-                                             │
-                   ┌─────────────────────────┼─────────────────────────┐
-                   │                         │                         │
-                   ▼                         ▼                         ▼
-        ┌─────────────────────┐   ┌─────────────────────┐   ┌─────────────────────┐
-        │  DynamoDB (Events)  │   │DynamoDB (Incidents) │   │     Amazon SNS      │
-        │   cloudlog_events   │   │  cloudlog_incidents │   │   (Critical Topic)  │
-        │  (All parsed logs)  │   │  (Errors/Critical)  │   │ (Email/SMS Alerts)  │
-        └─────────────────────┘   └─────────────────────┘   └─────────────────────┘
+[Application / Microservices]
+             │
+             ▼ (PutObject .jsonl batch)
+     [Amazon S3 Bucket]
+             │
+             ▼ (s3:ObjectCreated:* Notification)
+     [AWS Lambda: Log Processor]
+             │
+             ├──► [Ingestion: S3 Line Stream & Validation]
+             ├──► [Analyzer: Deterministic Hashing & Severity Classification]
+             │
+             ├──► [DynamoDB: cloudlog_events Table (All Validated Events)]
+             │
+             ├──► [DynamoDB: cloudlog_incidents Table (ERROR / CRITICAL)]
+             │
+             └──► [Amazon SNS Topic (CRITICAL Outage Alerts Only)]
+
+[React 19 Dashboard] ──(USER_PASSWORD_AUTH)──► [AWS Cognito User Pool]
+         │                                              │
+         │ (Authorization: Bearer <IdToken>)            ▼ (JWT Claims)
+         ▼
+[API Gateway HTTP API v2] ────(JWT Authorizer)────► [AWS Lambda: API Handler]
+                                                              │
+                                                              ▼
+                                                    [DynamoDB Dual-Table]
 ```
 
-For complete architectural decisions, data access patterns, and failure strategies, see [docs/architecture.md](docs/architecture.md).
+For complete architectural decisions, data models, and ADR records, see [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -54,105 +57,151 @@ For complete architectural decisions, data access patterns, and failure strategi
 ```text
 CloudLog/
 ├── backend/
-│   ├── common/              # Shared configs, constants, and utilities
-│   ├── ingestion/           # S3 event listener and payload extraction
-│   ├── analyzer/            # Log schema validation, parsing, and classification
-│   ├── incidents/           # Incident creation and lifecycle management
-│   └── api/                 # API handlers for querying logs & incidents
+│   ├── common/              # Configs, constants, and DynamoDB EventsRepository
+│   ├── ingestion/           # Streaming S3 JSONL reader and Lambda event handler
+│   ├── analyzer/            # Schema validation, models, and deterministic event ID generator
+│   ├── incidents/           # Incident models, IncidentsRepository (GSI), and SNSPublisher
+│   └── api/                 # API Lambda controller and Cognito RBAC claims evaluator
+├── frontend/                # React 19 + Vite dashboard SPA with dark-mode glassmorphism
+│   ├── src/
+│   │   ├── services/        # Cognito auth client and authenticated API Gateway fetcher
+│   │   ├── config.js        # AWS endpoints, client IDs, and demo user accounts
+│   │   ├── App.jsx          # Live incident queue, telemetry stream, and KPI cards
+│   │   └── App.css          # Glassmorphic responsive styling
 ├── infrastructure/
-│   └── terraform/           # Terraform IaC for S3, DynamoDB, Lambda, SNS, IAM
+│   └── terraform/           # Flat Terraform IaC (S3, DynamoDB, Lambda, SNS, Cognito, API GW)
+├── scripts/
+│   ├── generate_sample_logs.py  # Realistic multi-service JSONL log generator & S3 uploader
+│   └── test_e2e_aws.py          # Automated live AWS integration test suite
 ├── tests/
-│   ├── unit/                # Fast unit and integration tests (using moto)
-│   └── fixtures/            # Sample log payloads and S3 test events
+│   ├── unit/                # 68 unit tests for analyzer, ingestion, incidents, SNS, and API
+│   └── fixtures/            # Sample valid and malformed log files
 ├── docs/
-│   └── architecture.md      # System design, data models, and ADRs
-├── docker/                  # Docker configs (e.g., synthetic log generator)
-├── pyproject.toml           # Tooling & pytest configurations
-├── requirements.txt         # Runtime dependencies (boto3)
-└── requirements-dev.txt     # Development and testing dependencies (pytest, moto, ruff)
+│   └── architecture.md      # Comprehensive architecture specifications & ADRs
+└── .github/workflows/
+    └── ci.yml               # GitHub Actions CI pipeline (Python tests, frontend build, Terraform check)
 ```
 
 ---
 
-## Log Schema Specification
+## Log Ingestion Contract
 
-Services write logs as JSON objects or newline-delimited JSON (`.jsonl`). Each record follows this standard contract:
+Applications deliver logs as JSON Lines (`.jsonl`) to Amazon S3. Each line contains a self-contained JSON object conforming to the CloudLog contract:
 
 ```json
 {
-  "timestamp": "2026-08-25T14:31:05.412Z",
-  "service_name": "payment-service",
-  "log_level": "ERROR",
-  "message": "Payment transaction failed due to third-party timeout",
-  "error_code": "PGW_TIMEOUT_504",
-  "ip_address": "192.168.1.15",
-  "endpoint": "/api/v1/payments/process",
-  "metadata": {
-    "transaction_id": "tx_998124",
-    "retry_count": 3
-  }
+  "timestamp": "2026-09-05T18:20:00.123Z",
+  "service": "database-cluster",
+  "level": "CRITICAL",
+  "message": "Database connection pool fully exhausted. Deadlock detected.",
+  "error_code": "CRIT_DB_POOL_EMPTY",
+  "request_id": "req-9f2b84a1e70c"
 }
 ```
 
-### Severity Classification
+### Severity Classification & Escalation Rules
 
-| Level | Description | Destination | Alert Triggered |
+| Level | Operational Meaning | Target Tables | Triggers Incident | Triggers SNS Alert |
+| :--- | :--- | :--- | :---: | :---: |
+| `INFO` | Routine operational telemetry | `cloudlog_events` | No | No |
+| `WARNING` | Degraded conditions, cache latency | `cloudlog_events` | No | No |
+| `ERROR` | Application exceptions, request failures | `cloudlog_events`, `cloudlog_incidents` | **Yes (Status: OPEN)** | No |
+| `CRITICAL` | System outages, database exhaustion | `cloudlog_events`, `cloudlog_incidents` | **Yes (Status: OPEN)** | **Yes (Email/Push)** |
+
+---
+
+## Deployed AWS Infrastructure (`ap-south-1`)
+
+The live infrastructure is provisioned and running in AWS Region `ap-south-1`:
+
+| AWS Service | Resource Name / Endpoint | Purpose |
+| :--- | :--- | :--- |
+| **Amazon S3** | `cloudlog-raw-be259898` | Raw `.jsonl` log drop bucket with event notification |
+| **AWS Lambda** | `cloudlog-processor-dev` | Ingests S3 logs, validates records, and indexes events |
+| **AWS Lambda** | `cloudlog-api-dev` | REST controller backing API Gateway with RBAC checks |
+| **DynamoDB** | `cloudlog_events` | PK: `service`, SK: `timestamp#event_id` |
+| **DynamoDB** | `cloudlog_incidents` | PK: `incident_id`, GSI: `status-created_at-index` |
+| **Amazon SNS** | `cloudlog-critical-alerts-dev` | High-priority push notifications for critical incidents |
+| **Cognito Pool** | `ap-south-1_WD4fE4UTJ` | Identity provider with `Admin`, `Analyst`, `Viewer` roles |
+| **Cognito Client**| `iufl9c8nnt2f3vd9jdif0bhh7` | Public SPA client with `USER_PASSWORD_AUTH` flow |
+| **API Gateway** | `https://yldbrm495e.execute-api.ap-south-1.amazonaws.com` | HTTP API v2 with native Cognito JWT authorizer |
+
+### Pre-Configured Demo User Accounts
+
+| Role | Email | Password | Permissions |
 | :--- | :--- | :--- | :--- |
-| `INFO` | Routine operational messages | `cloudlog_events` | No |
-| `WARNING` | Degraded performance / elevated latencies | `cloudlog_events` | No |
-| `ERROR` | Recoverable application errors & exceptions | `cloudlog_events`, `cloudlog_incidents` | No |
-| `CRITICAL` | Unreachable dependencies, database outages | `cloudlog_events`, `cloudlog_incidents` | **Yes (SNS)** |
-| `SECURITY` | Unauthorized access attempts, brute force patterns | `cloudlog_events`, `cloudlog_incidents` | **Yes (SNS)** |
+| **Admin** | `admin@cloudlog.local` | `CloudLogAdmin#2026` | Full administrative access: view telemetry and resolve incidents |
+| **Analyst** | `analyst@cloudlog.local` | `CloudLogAnalyst#2026` | Operational access: view telemetry and resolve incidents |
+| **Viewer** | `viewer@cloudlog.local` | `CloudLogViewer#2026` | Read-only access: view telemetry (resolving incidents returns 403) |
 
 ---
 
 ## Getting Started
 
-### Prerequisites
-- Python 3.11+
-- Git
-
-### 1. Setup Local Environment
+### 1. Local Development Setup
 
 ```bash
-# Clone the repository (if not already local)
-git clone git@github.com:FarazAkhtarKhan/CloudLog.git
+# Clone the repository
+git clone https://github.com/FarazAkhtarKhan/CloudLog.git
 cd CloudLog
 
-# Create and activate a virtual environment
+# Initialize Python virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install development dependencies
 pip install -r requirements-dev.txt
 ```
 
-### 2. Run Tests
+### 2. Run Local Unit Test Suite (Offline)
 
-The test suite runs completely offline with mocked AWS services:
-
-```bash
-pytest
-```
-
-To run linting and style checks:
+Run all 68 unit tests executing against in-memory `moto` emulators:
 
 ```bash
-ruff check .
+pytest -v
 ```
+
+### 3. Run Live AWS End-to-End Test Suite
+
+Validate the live AWS infrastructure end-to-end:
+
+```bash
+AWS_PROFILE=terraform python scripts/test_e2e_aws.py
+```
+
+This automated script:
+1. Generates and uploads a synthetic log batch to `s3://cloudlog-raw-be259898`.
+2. Verifies the S3 trigger initiates `cloudlog-processor-dev` Lambda.
+3. Asserts that all events appear in DynamoDB `cloudlog_events`.
+4. Asserts that both ERROR and CRITICAL incidents appear in `cloudlog_incidents`.
+5. Authenticates with AWS Cognito to retrieve JWT `IdToken`s.
+6. Tests API Gateway `/statistics`, `/services`, and `/incidents` routes.
+7. Confirms an Analyst can successfully resolve an incident (`200 OK`).
+8. Confirms a Viewer attempting to resolve an incident receives `403 Forbidden`.
+
+### 4. Ingest Sample Logs into AWS
+
+Upload realistic multi-service logs to trigger live incidents:
+
+```bash
+AWS_PROFILE=terraform .venv/bin/python scripts/generate_sample_logs.py --count 25 --s3-bucket cloudlog-raw-be259898
+```
+
+### 5. Launch the Frontend Dashboard
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` in your browser. Use the **Quick Evaluation Logins** buttons on the login screen to sign in instantly as Admin, Analyst, or Viewer!
 
 ---
 
-## Configuration
+## Infrastructure Teardown
 
-CloudLog components are configured using standard environment variables:
+When your evaluation or demonstration is finished, destroy all AWS resources with a single command to ensure **zero residual charges**:
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `AWS_REGION` | AWS target region | `us-east-1` |
-| `EVENTS_TABLE_NAME` | DynamoDB table for all log events | `cloudlog_events` |
-| `INCIDENTS_TABLE_NAME` | DynamoDB table for incidents | `cloudlog_incidents` |
-| `SNS_ALERT_TOPIC_ARN` | SNS topic ARN for critical alert notifications | `""` |
-
----
-
+```bash
+cd infrastructure/terraform
+AWS_PROFILE=terraform terraform destroy -auto-approve
+```

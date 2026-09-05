@@ -108,20 +108,41 @@ Stores all validated log records for historical inspection and service-level tim
 ### 4.2 Table 2: `cloudlog_incidents`
 Stores actionable operational anomalies and incident lifecycles.
 
-* **Partition Key (PK):** `incident_id` (String, e.g. `"INC-20260829-8F14C2B9"`)
-* **Sort Key (SK):** `created_at` (String, ISO 8601)
+### 4.2 Table 2: `cloudlog_incidents`
+Stores actionable operational anomalies and incident lifecycles.
+
+* **Partition Key (PK):** `incident_id` (String, e.g. `"inc_8f14c2b9a70e31d4"`)
+* **Global Secondary Index (GSI):** `status-created_at-index`
+  * **GSI Partition Key:** `status` (String, e.g. `"OPEN"`, `"RESOLVED"`)
+  * **GSI Sort Key:** `created_at` (String, ISO 8601 UTC timestamp)
 
 #### Stored Attributes:
-* `incident_id` (String)
-* `created_at` (String)
-* `service` (String)
+* `incident_id` (String) — Primary partition key (`"inc_" + event_id[4:]`)
+* `service` (String) — Originating service name
 * `severity` (String) — `ERROR` or `CRITICAL`
-* `status` (String) — `OPEN`, `RESOLVED`
-* `error_code` (String, optional)
-* `message` (String)
-* `source_event_id` (String) — Pointer to originating log record in `cloudlog_events`
-* `source_s3_uri` (String)
-* `resolved_at` (String, optional)
+* `status` (String) — `OPEN` or `RESOLVED` (starts as `OPEN`)
+* `message` (String) — Root cause error message
+* `error_code` (String, optional) — Machine error code when present
+* `source_event_id` (String) — Logical reference to triggering event in `cloudlog_events`
+* `source_s3_uri` (String) — S3 file origin
+* `created_at` (String) — ISO 8601 timestamp of incident creation
+* `resolved_at` (String, optional) — ISO 8601 timestamp when resolved
+
+#### Incident Creation & Escalation Rules:
+* `INFO` $\rightarrow$ Event only (No incident)
+* `WARNING` $\rightarrow$ Event only (No incident)
+* `ERROR` $\rightarrow$ Event + Incident (status: `OPEN`, severity: `ERROR`, no SNS alert)
+* `CRITICAL` $\rightarrow$ Event + Incident (status: `OPEN`, severity: `CRITICAL`, triggers SNS alert)
+
+#### Idempotency & Deterministic Incident ID:
+* `incident_id` is derived deterministically from the triggering log event's `event_id`:
+  $$\text{incident\_id} = \text{"inc\_"} + \text{event.event\_id}[4:]$$
+  *(e.g., `evt_8f14c2b9a70e31d4` $\rightarrow$ `inc_8f14c2b9a70e31d4`)*
+* Processing the same event again produces identical keys and performs an idempotent write, preventing duplicate incidents.
+
+#### Lifecycle:
+$$\text{OPEN} \xrightarrow{\text{resolve\_incident()}} \text{RESOLVED}$$
+*(Intermediate states such as `IN_PROGRESS` or `TRIAGED` are intentionally excluded to keep the MVP simple).*
 
 ---
 
@@ -132,10 +153,10 @@ Stores actionable operational anomalies and incident lifecycles.
 * **Decision:** Ingest logs using **JSON Lines (`.jsonl`)** delivered to S3.
 * **Rationale:** Industry standard for structured log aggregation (AWS CloudWatch, FluentBit, Vector). Enables robust line-by-line streaming without buffering entire multi-megabyte JSON arrays in memory.
 
-### ADR 002: Dual-Table DynamoDB Schema & Collision-Safe Sort Keys
+### ADR 002: Dual-Table DynamoDB Schema & GSI Incident Querying
 * **Status:** `ACCEPTED`
-* **Decision:** Separate `cloudlog_events` (`PK = service`, `SK = timestamp#event_id`) and `cloudlog_incidents` (`PK = incident_id`, `SK = created_at`).
-* **Rationale:** Appending `event_id` to the sort key prevents record overwrites when multiple events share identical timestamps while retaining single-service time-series organization.
+* **Decision:** Separate `cloudlog_events` (`PK = service`, `SK = timestamp#event_id`) and `cloudlog_incidents` (`PK = incident_id`, GSI: `status-created_at-index`).
+* **Rationale:** Direct O(1) incident lookups and updates by `incident_id`, while the GSI enables high-performance chronological queries for active (`OPEN`) incidents on the dashboard without table scans.
 
 ### ADR 003: Deterministic Event IDs for Serverless Idempotency
 * **Status:** `ACCEPTED`
@@ -146,3 +167,102 @@ Stores actionable operational anomalies and incident lifecycles.
 * **Status:** `ACCEPTED`
 * **Decision:** Standardize on in-memory `pytest` and `moto` for local testing.
 * **Rationale:** Fast execution, zero Docker container overhead, seamless execution in local environments and CI pipelines.
+
+### ADR 005: AWS Cognito JWT Authorizer & Stateless RBAC
+* **Status:** `ACCEPTED`
+* **Decision:** Implement stateless authentication using Amazon Cognito User Pools with native API Gateway HTTP API JWT Authorizers.
+* **Rationale:** Offloads token verification, cryptographic signature checks, and expiration validation to AWS edge infrastructure before requests ever reach Lambda. Eliminates custom auth microservice maintenance and ensures zero runtime token database lookups.
+
+### ADR 006: Direct Browser Cognito Authentication (`USER_PASSWORD_AUTH`)
+* **Status:** `ACCEPTED`
+* **Decision:** Perform direct authentication from the client browser against the public Cognito Identity Provider endpoint using standard `fetch`.
+* **Rationale:** Eliminates backend compute costs and proxy hops for user login while keeping credentials completely out of API Gateway logs.
+
+### ADR 007: API Gateway HTTP API v2 over REST API v1
+* **Status:** `ACCEPTED`
+* **Decision:** Deploy API Gateway HTTP API (`v2`) instead of traditional REST API (`v1`).
+* **Rationale:** HTTP APIs offer ~70% lower latency, native JWT authorizer integration, automatic CORS handling, and ~71% lower cost ($1.00/million requests vs $3.50/million requests), perfectly tailored for modern Single Page Applications (SPAs).
+
+---
+
+## 6. API Gateway HTTP API v2 & Controller Contract
+
+The CloudLog API exposes RESTful endpoints backed by a single Lambda controller (`cloudlog-api-dev`):
+
+| Method | Route | Auth Required | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/statistics` | Yes | Admin, Analyst, Viewer | System-wide ingestion and incident totals |
+| `GET` | `/services` | Yes | Admin, Analyst, Viewer | Unique list of monitored services |
+| `GET` | `/events` | Yes | Admin, Analyst, Viewer | Paginated telemetry logs with level/service filters |
+| `GET` | `/events/critical`| Yes | Admin, Analyst, Viewer | Filtered list of critical incidents |
+| `GET` | `/incidents` | Yes | Admin, Analyst, Viewer | Operational incidents with `status` filter |
+| `GET` | `/incidents/{id}` | Yes | Admin, Analyst, Viewer | Detailed inspection of a specific incident |
+| `PATCH` | `/incidents/{id}` | Yes | **Admin, Analyst only** | Lifecycle transition from `OPEN` to `RESOLVED` |
+
+---
+
+## 7. Role-Based Access Control (RBAC) Specification
+
+Access control is enforced at two distinct security perimeters:
+1. **API Gateway Perimeter (Authentication):** API Gateway validates the signature and issuer of the incoming Cognito JWT `IdToken`. Invalid, expired, or tampered tokens receive `401 Unauthorized` before invoking the backend.
+2. **Lambda Application Perimeter (Authorization):** The API Lambda inspects `cognito:groups` claims:
+   - **`Admin`**: Full operational access. Can view telemetry, list incidents, and resolve active incidents.
+   - **`Analyst`**: Incident response access. Can view telemetry, list incidents, and mark incidents as resolved.
+   - **`Viewer`**: Read-only stakeholder access. Can monitor telemetry and review incident queues. Attempting `PATCH /incidents/{id}` strictly returns `403 Forbidden`.
+
+---
+
+## 8. Frontend Single-Page Application (SPA)
+
+* **Framework:** React 19 + Vite
+* **Styling:** Custom Vanilla CSS with dark-mode glassmorphic aesthetics, responsive grid layouts, and color-coded severity badges.
+* **Session Management:** Secure browser `sessionStorage` containing Cognito JWT `IdToken`.
+* **Real-Time Experience:** 10-second polling interval with manual refresh option and live animated state badges.
+
+---
+
+## 9. Infrastructure as Code (Terraform) Profile
+
+* **Location:** `infrastructure/terraform/`
+* **Structure:** Flat architecture (`main.tf`, `s3.tf`, `dynamodb.tf`, `lambda.tf`, `api_lambda.tf`, `api_gateway.tf`, `cognito.tf`, `sns.tf`, `cloudwatch.tf`, `iam.tf`, `outputs.tf`).
+* **Cost Profile:** 100% Free Tier compliant on AWS (`ap-south-1`):
+  - DynamoDB: On-demand (pay-per-request) or provisioned within 25 RCU/WCU free tier.
+  - S3: Standard storage with limited retention.
+  - Lambda: Invocations within 1 million free requests/month.
+  - Cognito: Up to 50,000 Monthly Active Users (MAU) free.
+  - CloudWatch: 7-day log retention to prevent accumulation of storage fees.
+
+---
+
+## 10. Operational Procedures
+
+### 10.1 Running Local Tests
+```bash
+source .venv/bin/activate
+pytest -v
+```
+
+### 10.2 End-to-End AWS Validation
+```bash
+AWS_PROFILE=terraform python scripts/test_e2e_aws.py
+```
+
+### 10.3 Generating and Ingesting Live Telemetry
+```bash
+# Generate and upload a 20-record batch directly to live S3
+AWS_PROFILE=terraform .venv/bin/python scripts/generate_sample_logs.py --count 20 --s3-bucket cloudlog-raw-be259898
+```
+
+### 10.4 Starting Local Frontend Dashboard
+```bash
+cd frontend
+npm run dev
+```
+
+### 10.5 Infrastructure Teardown
+When the demonstration or evaluation is complete, destroy all cloud resources with zero residual billing:
+```bash
+cd infrastructure/terraform
+AWS_PROFILE=terraform terraform destroy -auto-approve
+```
+
