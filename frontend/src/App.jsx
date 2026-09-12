@@ -211,7 +211,7 @@ export default function App() {
       <div className="auth-wrapper">
         <div className="auth-card">
           <div className="auth-header">
-            <div style={{ display: "inline-flex", padding: "0.75rem", background: "linear-gradient(135deg, #3b82f6, #8b5cf6)", borderRadius: "12px", marginBottom: "1rem", boxShadow: "0 0 20px rgba(99,102,241,0.4)" }}>
+            <div style={{ display: "inline-flex", padding: "0.75rem", background: "linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))", borderRadius: "12px", marginBottom: "1rem", boxShadow: "0 0 20px var(--accent-glow)" }}>
               <ShieldAlert size={36} color="#ffffff" />
             </div>
             <h1 style={{ fontSize: "1.6rem", fontWeight: "700", letterSpacing: "-0.02em" }}>CloudLog</h1>
@@ -418,7 +418,7 @@ export default function App() {
       {/* KPI Cards Row */}
       <div className="kpi-grid">
         <div className="kpi-card">
-          <div className="kpi-icon-box" style={{ background: "rgba(59, 130, 246, 0.15)", color: "#3b82f6" }}>
+          <div className="kpi-icon-box" style={{ background: "rgba(31, 181, 170, 0.2)", color: "var(--accent-primary)" }}>
             <Database size={24} />
           </div>
           <div>
@@ -531,7 +531,7 @@ export default function App() {
                               {inc.severity}
                             </span>
                           </td>
-                          <td className="mono" style={{ fontWeight: "600", color: "#93c5fd" }}>
+                          <td className="mono" style={{ fontWeight: "600", color: "var(--accent-soft)" }}>
                             {inc.service}
                           </td>
                           <td style={{ maxWidth: "260px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={inc.message}>
@@ -574,7 +574,7 @@ export default function App() {
           <div className="panel">
             <div className="section-header" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
               <div className="section-title">
-                <FileText size={18} color="#3b82f6" />
+                <FileText size={18} color="var(--accent-primary)" />
                 <span>Live Telemetry Stream</span>
               </div>
 
@@ -636,7 +636,7 @@ export default function App() {
                           <td>
                             <span className={`badge ${levelClass}`}>{evt.level}</span>
                           </td>
-                          <td className="mono" style={{ color: "#93c5fd", fontWeight: "500" }}>
+                          <td className="mono" style={{ color: "var(--accent-soft)", fontWeight: "500" }}>
                             {evt.service}
                           </td>
                           <td style={{ maxWidth: "340px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={evt.message}>
@@ -661,7 +661,7 @@ export default function App() {
           <div className="panel">
             <div className="section-header">
               <div className="section-title">
-                <Activity size={18} color="#8b5cf6" />
+                <Activity size={18} color="var(--accent-secondary)" />
                 <span>Severity Distribution</span>
               </div>
             </div>
@@ -743,7 +743,7 @@ export default function App() {
                     }}
                     onClick={() => setFilterService(filterService === svc ? "" : svc)}
                   >
-                    <span className="mono" style={{ fontSize: "0.85rem", fontWeight: "600", color: filterService === svc ? "#3b82f6" : "var(--text-primary)" }}>
+                    <span className="mono" style={{ fontSize: "0.85rem", fontWeight: "600", color: filterService === svc ? "var(--accent-primary)" : "var(--text-primary)" }}>
                       {svc}
                     </span>
                     <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
@@ -783,7 +783,7 @@ export default function App() {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <span style={{ color: "var(--text-muted)" }}>RBAC Authorization</span>
-                <span style={{ color: "#8b5cf6", fontWeight: "600" }}>Cognito JWT</span>
+                <span style={{ color: "var(--accent-secondary)", fontWeight: "600" }}>Cognito JWT</span>
               </div>
             </div>
           </div>
@@ -810,7 +810,7 @@ export default function App() {
             <div className="modal-body">
               <div className="modal-row">
                 <span className="label">Incident ID</span>
-                <span className="mono" style={{ fontSize: "0.8rem", color: "#93c5fd" }}>
+                <span className="mono" style={{ fontSize: "0.8rem", color: "var(--accent-soft)" }}>
                   {selectedIncident.incident_id}
                 </span>
               </div>

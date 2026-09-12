@@ -25,13 +25,13 @@
 .brand-icon {
   width: 42px;
   height: 42px;
-  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
   border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
-  box-shadow: 0 0 15px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 0 16px var(--accent-glow);
 }
 
 .brand-title {
@@ -80,6 +80,14 @@
   background: var(--bg-card);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border-color);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.24);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(148, 181, 195, 0.32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 14px 28px rgba(0, 0, 0, 0.28);
 }
 
 .kpi-icon-box {
@@ -138,7 +146,8 @@
 
 .tab-group {
   display: flex;
-  background: #1f2937;
+  background: rgba(7, 20, 28, 0.9);
+  border: 1px solid rgba(148, 181, 195, 0.2);
   padding: 0.2rem;
   border-radius: 8px;
   gap: 0.2rem;
@@ -157,8 +166,9 @@
 }
 
 .tab-btn.active {
-  background: #374151;
+  background: rgba(31, 181, 170, 0.18);
   color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px rgba(31, 181, 170, 0.4);
 }
 
 /* Breakdown Bars */
@@ -200,7 +210,7 @@
 }
 
 .modal-content {
-  background: #111827;
+  background: #0f1f29;
   border: 1px solid var(--border-color);
   border-radius: 14px;
   width: 100%;
