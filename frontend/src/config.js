@@ -20,14 +20,14 @@ export const DEMO_ACCOUNTS = [
     email: "admin@cloudlog.local",
     password: "CloudLogAdmin#2026",
     description: "Full administrative access: view telemetry and resolve incidents",
-    badgeColor: "#8b5cf6",
+    badgeColor: "#d97706",
   },
   {
     role: "Analyst",
     email: "analyst@cloudlog.local",
     password: "CloudLogAnalyst#2026",
     description: "Operational access: view telemetry and resolve incidents",
-    badgeColor: "#3b82f6",
+    badgeColor: "#1fb5aa",
   },
   {
     role: "Viewer",
