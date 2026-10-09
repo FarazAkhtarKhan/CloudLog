@@ -211,7 +211,7 @@ export default function App() {
       <div className="auth-wrapper">
         <div className="auth-card">
           <div className="auth-header">
-            <div style={{ display: "inline-flex", padding: "0.75rem", background: "linear-gradient(135deg, #3b82f6, #8b5cf6)", borderRadius: "12px", marginBottom: "1rem", boxShadow: "0 0 20px rgba(99,102,241,0.4)" }}>
+            <div style={{ display: "inline-flex", padding: "0.75rem", background: "linear-gradient(135deg, #f06a4f, #d44735)", borderRadius: "12px", marginBottom: "1rem", boxShadow: "0 0 20px rgba(240,106,79,0.3)" }}>
               <ShieldAlert size={36} color="#ffffff" />
             </div>
             <h1 style={{ fontSize: "1.6rem", fontWeight: "700", letterSpacing: "-0.02em" }}>CloudLog</h1>
@@ -661,7 +661,7 @@ export default function App() {
           <div className="panel">
             <div className="section-header">
               <div className="section-title">
-                <Activity size={18} color="#8b5cf6" />
+                <Activity size={18} color="#f0b44d" />
                 <span>Severity Distribution</span>
               </div>
             </div>
@@ -783,7 +783,7 @@ export default function App() {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <span style={{ color: "var(--text-muted)" }}>RBAC Authorization</span>
-                <span style={{ color: "#8b5cf6", fontWeight: "600" }}>Cognito JWT</span>
+                <span style={{ color: "#f0b44d", fontWeight: "600" }}>Cognito JWT</span>
               </div>
             </div>
           </div>
