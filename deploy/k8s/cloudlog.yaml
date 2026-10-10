@@ -1,0 +1,50 @@
+# Runs the CloudLog offline demo on Kubernetes (minikube, kind, k3s...).
+#   docker build -t cloudlog-emulator:latest .       # then load it into your cluster
+#   kubectl apply -f deploy/k8s/cloudlog.yaml
+#   kubectl port-forward svc/cloudlog 8000:80        -> http://localhost:8000
+#
+# One replica only: the emulator keeps all data in memory, so replicas would not share state.
+# In the AWS deployment this role is played by Lambda, which scales without any of this.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudlog
+  labels: { app: cloudlog }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: cloudlog }
+  template:
+    metadata:
+      labels: { app: cloudlog }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: emulator
+          image: cloudlog-emulator:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          readinessProbe:
+            httpGet: { path: /rules, port: 8000 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /rules, port: 8000 }
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudlog
+spec:
+  selector: { app: cloudlog }
+  ports:
+    - port: 80
+      targetPort: 8000

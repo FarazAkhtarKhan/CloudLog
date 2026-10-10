@@ -1,221 +1,265 @@
 # CloudLog
-> **Serverless Critical Log Analysis and Incident Detection System**
 
-CloudLog is a serverless application designed to collect, analyze, and monitor application logs across microservices in real time. Instead of running expensive, always-on server clusters (like Elasticsearch or Datadog) that cost money even when idle, CloudLog uses pay-per-use AWS serverless services (Amazon S3, AWS Lambda, DynamoDB, API Gateway, and Amazon SNS). 
+**Serverless error-log detection on AWS.** Services drop JSON Lines log files into Amazon S3. Each file
+triggers a Lambda function that validates every line, masks personal data, stores the events in
+DynamoDB and runs detection rules. Repeated failures are grouped into one incident, recurring errors are
+escalated, and anything critical pages on-call through Amazon SNS. A React dashboard (behind API Gateway
+and Cognito) shows the pipeline working in real time and lets analysts acknowledge and resolve incidents.
 
-When applications send logs, CloudLog automatically detects critical system errors, files an incident ticket, alerts administrators immediately via email, and displays everything on a web dashboard.
+Errors are simulated: the dashboard's **Simulator** writes realistic failure scenarios (a database outage, a
+brute-force login attack, an IoT cold-chain fault, a malformed file...) to S3 so every cloud component can
+be seen doing its job.
 
----
-
-## The Problem CloudLog Solves
-
-When deploying modern cloud applications and microservices:
-1. **High Costs**: Popular log monitoring tools (like Datadog, Splunk, or self-hosted Elasticsearch clusters) require running servers 24/7. This often costs $50–$300+ every month just to keep the servers running, even during low-traffic periods.
-2. **Delayed Incident Detection**: When a critical failure occurs (such as a database crashing or a payment gateway timing out), teams often discover the problem only after customers complain.
-3. **Complex Maintenance**: Managing logging servers requires ongoing patching, scaling, storage re-indexing, and cluster backups.
-
-### The CloudLog Solution
-* **Zero Cost When Idle**: Built 100% on the **AWS Free Tier**. When no logs are arriving, compute cost is **$0**.
-* **Instant Outage Alerts**: Critical errors trigger immediate push notifications to administrators through **Amazon SNS**.
-* **Automated Incident Tracking**: Errors are automatically organized into an incident queue with lifecycle tracking (`OPEN` → `RESOLVED`).
-* **Interactive Web Dashboard**: A responsive web interface allows engineers to inspect logs, view statistics, and test incident scenarios with a single click.
+The whole stack also runs **offline** in an emulator, so it can be demonstrated without an AWS account.
 
 ---
 
-## How It Works (Step-by-Step Architecture)
+## Architecture
 
-The system is split into two clean workflows:
-
-### 1. The Log Ingestion & Incident Detection Pipeline
-```
-[Microservices / Applications]
-              │
-              ▼ 1. Uploads .jsonl log files
-      [Amazon S3 Bucket]
-              │
-              ▼ 2. S3 triggers function automatically on file drop
-     [AWS Lambda: Log Processor]
-              │
-              ├──► 3. Parses and saves all logs into [DynamoDB: cloudlog_events]
-              │
-              ├──► 4. If ERROR or CRITICAL, creates incident in [DynamoDB: cloudlog_incidents]
-              │
-              └──► 5. If CRITICAL, sends instant email alert via [Amazon SNS]
+```mermaid
+flowchart LR
+  subgraph Ingestion["Ingestion (event-driven)"]
+    SRC[Services / Simulator] -->|PUT .jsonl| S3[(S3 raw log bucket)]
+    S3 -->|ObjectCreated event| P[Lambda: log processor]
+    P -->|events, incidents, runs| DB[(DynamoDB x3)]
+    P -->|critical incidents| SNS[SNS topic] --> MAIL[On-call email]
+    P -. after 2 failed retries .-> DLQ[(SQS dead-letter queue)]
+  end
+  subgraph Query["Queries (request / response)"]
+    UI[React dashboard on CloudFront] -->|JWT| GW[API Gateway HTTP API]
+    COG[Cognito user pool] -. issues tokens .-> UI
+    GW -->|verified claims| API[Lambda: API handler] --> DB
+    API -->|simulations| S3
+  end
+  CW[CloudWatch alarms] -->|processor errors, DLQ depth| SNS
 ```
 
-1. **Log Upload**: Microservices drop structured `.jsonl` log files into an **Amazon S3** bucket.
-2. **Automatic Trigger**: S3 automatically notifies **AWS Lambda** the instant a file arrives.
-3. **Parsing & Validation**: Lambda streams the file line-by-line, validates the JSON format, and generates a unique fingerprint for each log to prevent duplicate entries.
-4. **Database Storage**: All valid logs are saved in **Amazon DynamoDB** (`cloudlog_events`).
-5. **Incident Escalation**: 
-   * `INFO` and `WARNING` logs are stored for reference.
-   * `ERROR` logs automatically create an `OPEN` incident in `cloudlog_incidents`.
-   * `CRITICAL` logs (like database crashes or transaction outages) create an incident **and** send an immediate push email notification via **Amazon SNS**.
-
-### 2. The Dashboard & Query Pipeline
-```
-[React 19 Web Dashboard]
-              │
-              ▼ 1. User signs in via email/password
-      [AWS Cognito User Pool] (Issues verified JWT tokens)
-              │
-              ▼ 2. Browser calls API with Bearer token
-    [Amazon API Gateway HTTP API]
-              │
-              ▼ 3. Verifies token and routes to Lambda
-     [AWS Lambda: API Handler]
-              │
-              ▼ 4. Reads telemetry / Updates incident status
-    [Amazon DynamoDB Tables]
-```
-
-1. **Authentication**: Users sign into the dashboard using **AWS Cognito**.
-2. **Role Verification**: API Gateway validates the user's security token and passes role permissions (`Admin`, `Analyst`, or `Viewer`).
-3. **Data Retrieval**: The API Lambda fetches real-time counters, incident lists, and telemetry streams from DynamoDB.
-4. **Incident Resolution**: Analysts and Admins can click "Resolve" to close active incidents.
+| Step | What happens | Where in the code |
+| --- | --- | --- |
+| 1 | A `.jsonl` file lands in S3 (from a service, the CLI, or the simulator) | [backend/handlers/api.py](backend/handlers/api.py) `simulate` |
+| 2 | S3 invokes the processor Lambda asynchronously | [infrastructure/terraform/s3.tf](infrastructure/terraform/s3.tf) |
+| 3 | Each line is validated, normalised and PII-masked; one bad line never aborts the file | [backend/analyzer/parser.py](backend/analyzer/parser.py), [privacy.py](backend/analyzer/privacy.py) |
+| 4 | Events are batch-written to DynamoDB with a 7-day TTL | [backend/storage/events.py](backend/storage/events.py) |
+| 5 | Detection rules turn lines into detections | [backend/analyzer/detector.py](backend/analyzer/detector.py) |
+| 6 | Detections open, update, escalate or reopen incidents with atomic, idempotent updates | [backend/storage/incidents.py](backend/storage/incidents.py) |
+| 7 | Critical incidents are published to SNS | [backend/alerts/sns.py](backend/alerts/sns.py) |
+| 8 | A pipeline-run record (counts, rejections, per-stage timings) is saved for the dashboard trace | [backend/handlers/processor.py](backend/handlers/processor.py) |
+| 9 | The dashboard queries everything through API Gateway; statistics use MapReduce | [backend/analytics/mapreduce.py](backend/analytics/mapreduce.py) |
 
 ---
 
-## Key Features
+## Run it offline in two minutes
 
-* **Real-Time Web Dashboard**: Built with React 19 and custom dark-mode styling. Includes auto-refreshing metrics, log filtering by service/severity, and an incident response table.
-* **In-Browser Incident Simulator**: Built-in simulator with 1-click presets (Database Deadlock, Payment 504, Auth Bursts). You can trigger real cloud incidents live from the browser without running any terminal commands!
-* **Role-Based Access Control (RBAC)**:
-  * **Admin**: Full access to view logs and resolve incidents.
-  * **Analyst**: Operational access to monitor systems and resolve incidents.
-  * **Viewer**: Read-only access for stakeholders (attempting to modify incidents is safely blocked).
-* **Duplicate Prevention (Idempotent Processing)**: Uses deterministic SHA-256 hashing based on the S3 file and line number. Even if AWS Lambda retries processing the same file, no duplicate records or duplicate incidents are created.
-* **100% Infrastructure as Code (Terraform)**: The entire AWS setup (S3, Lambda, DynamoDB, API Gateway, Cognito, SNS, CloudWatch) is defined in clean Terraform files and can be deployed or deleted with a single command.
-* **Comprehensive Test Coverage**: **70 passing automated tests** verifying log parsing, DynamoDB persistence, incident creation rules, SNS alert dispatching, and API security.
+No AWS account needed. S3, DynamoDB and SNS are emulated in memory with [moto](https://github.com/getmoto/moto);
+the emulator invokes the **same Lambda handler code** that runs in AWS.
 
----
-
-## Log Format Contract
-
-Applications deliver logs as JSON Lines (`.jsonl`). Each line is a self-contained JSON object:
-
-```json
-{
-  "timestamp": "2026-09-05T18:20:00.123Z",
-  "service": "database-cluster",
-  "level": "CRITICAL",
-  "message": "Database connection pool exhausted. Deadlock detected.",
-  "error_code": "CRIT_DB_DEADLOCK",
-  "request_id": "req-9f2b84a1e70c"
-}
-```
-
-### Log Levels & System Behavior
-
-| Level | What It Represents | Stored in Events? | Creates Incident? | Sends SNS Alert? |
-| :--- | :--- | :---: | :---: | :---: |
-| `INFO` | Routine operations (e.g. user logged in, order created) | Yes | No | No |
-| `WARNING` | Degraded performance, minor latency, high cache usage | Yes | No | No |
-| `ERROR` | Unhandled exceptions, failed requests, service timeouts | Yes | **Yes (Status: OPEN)** | No |
-| `CRITICAL` | Service down, database deadlock, payment gateway failure | Yes | **Yes (Status: OPEN)** | **Yes (Email Alert)** |
-
----
-
-## Active AWS Deployment Details
-
-The system is deployed and active in AWS Region **`ap-south-1` (Mumbai)**:
-
-| Component | Resource Name / Endpoint |
-| :--- | :--- |
-| **S3 Ingestion Bucket** | `cloudlog-raw-c112484d` |
-| **Lambda Processor** | `cloudlog-processor-dev` |
-| **Lambda API Handler** | `cloudlog-api-dev` |
-| **DynamoDB Events Table** | `cloudlog_events` |
-| **DynamoDB Incidents Table** | `cloudlog_incidents` |
-| **Amazon SNS Topic** | `arn:aws:sns:ap-south-1:794038220540:cloudlog-critical-alerts-dev` |
-| **Cognito User Pool ID** | `ap-south-1_BqIJiqapr` |
-| **Cognito Client ID** | `o46k2sr3chiu311q6g199lmit` |
-| **API Gateway URL** | `https://n6ccjux86f.execute-api.ap-south-1.amazonaws.com` |
-
----
-
-## Quickstart & Evaluation Guide
-
-### 1. Start the Frontend Dashboard
-To run the web interface locally:
+**Option A: Docker or Podman (one command)**
 
 ```bash
-cd frontend
-npm install
-npm run dev
+docker compose up --build        # or: podman compose up --build
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your web browser.
+Open <http://localhost:8000>.
 
-### 2. Sign In (Pre-Configured Demo Accounts)
-The login screen has **one-click login buttons** for instant evaluation:
-
-* **Analyst**: `analyst@cloudlog.local` / `CloudLogAnalyst#2026` *(Recommended for testing)*
-* **Admin**: `admin@cloudlog.local` / `CloudLogAdmin#2026`
-* **Viewer**: `viewer@cloudlog.local` / `CloudLogViewer#2026` *(Read-only)*
-
-### 3. How to Trigger and Test an Incident Live
-
-You can trigger a live incident in two different ways:
-
-#### Option A: From the Web Dashboard (Easiest)
-1. Click the red **⚡ Trigger Incident** button in the dashboard header.
-2. Click the **"DB Deadlock"** preset (or choose another scenario).
-3. Click **"Trigger in AWS Live"**.
-4. The dashboard uploads the log to S3, Lambda analyzes it, and the new incident appears in the **Incident Response Queue** in 1–2 seconds!
-
-#### Option B: From the Terminal
-Run the provided helper script:
-```bash
-./trigger_incident.sh
-```
-Or send a full batch of 25 multi-service logs:
-```bash
-./send_logs.sh
-```
-
-### 4. How to Receive Real-Time Email Alerts from SNS
-To receive email notifications on your personal email whenever a `CRITICAL` incident occurs:
+**Option B: Python + Node (for development)**
 
 ```bash
-AWS_PROFILE=terraform aws sns subscribe \
-  --topic-arn arn:aws:sns:ap-south-1:794038220540:cloudlog-critical-alerts-dev \
-  --protocol email \
-  --notification-endpoint your-email@gmail.com \
-  --region ap-south-1
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m backend.local.emulator --seed --traffic 20     # API on :8000
+
+cd frontend && npm install && npm run dev                           # dashboard on :5173
 ```
-Open your email inbox and click **"Confirm subscription"**. Then trigger any `CRITICAL` incident to receive the alert.
+
+| Emulator flag | Effect |
+| --- | --- |
+| `--seed` | Loads a few scenarios at start-up so the dashboard isn't empty |
+| `--traffic 20` | Uploads normal traffic every ~20 s so the charts move |
+| `--delay 0.8` | Emulated S3-to-Lambda trigger latency, in seconds |
+
+Sign in by choosing a role. **Analyst** is the best role for a demo; **Viewer** shows the API refusing changes.
 
 ---
 
-## Testing & Quality Assurance
+## Five-minute demo script
 
-### Run Local Unit Tests (Offline)
-Run all 70 unit tests using `pytest`:
+1. **Sign in as Analyst.** Point out the role chip: permissions come from Cognito groups and are enforced by the API.
+2. **Overview.** The pipeline map is the architecture, live. Each node shows what happened to the last file.
+3. **Simulator → Database outage → Run.** Follow the file: uploaded to S3, Lambda invoked, lines stored,
+   rules applied, SNS alert published. Switch to Overview and the packet travels the map; the critical
+   path turns red.
+4. **Incidents.** Seven log lines became four incidents, not seven tickets. Open the critical one: the
+   timeline shows *opened → alerted*. Acknowledge it with a note, then resolve it.
+5. **Simulator → Payment timeouts → Run twice.** The second run pushes the incident past five occurrences
+   and it **escalates** to CRITICAL with a new alert. Card numbers and emails in the logs are masked.
+6. **Run Database outage again** after resolving: the incident **reopens** (a regression) and keeps its history.
+7. **Malformed log file.** Five broken lines are rejected with reasons; the valid lines are still stored.
+8. **Pipeline page.** Every Lambda invocation with per-stage timing. Expand a row.
+9. **Sign out, sign in as Viewer**, try to resolve: refused with 403 by the API, not just hidden in the UI.
+
+---
+
+## Features
+
+### Detection rules
+
+| Rule | Fires when | Result |
+| --- | --- | --- |
+| Critical log line | Any `CRITICAL` line | Critical incident + SNS alert |
+| Error log line | Any `ERROR` line | Error incident; repeats join it |
+| Brute-force login | 5+ failed logins from one IP in a file | Critical **security** incident + alert |
+| Warning burst | The same warning 3+ times in a file | Error incident (degradation) |
+| Recurring error escalation | An error incident reaches 5 occurrences in total | Escalated to CRITICAL + alert |
+
+Thresholds live in [backend/config.py](backend/config.py).
+
+### Grouping and the incident lifecycle
+
+Every line gets a **fingerprint**: a hash of the service plus its error code (or, without one, the message with
+numbers and IDs stripped, so `timed out after 5012ms` and `timed out after 5390ms` match). One fingerprint is
+one incident.
+
+```
+OPEN ──acknowledge──► ACKNOWLEDGED ──resolve──► RESOLVED
+  └───────────────────resolve──────────────────────┘    └─ same error again ─► OPEN (reopened)
+```
+
+Every change is appended to the incident's timeline with who did it and when. The dashboard reports
+mean time to acknowledge (MTTA) and mean time to resolve (MTTR).
+
+### Reliability
+
+- **Idempotent processing.** S3 and Lambda deliver *at least once*. Event IDs are a hash of
+  `bucket:key:line`, so a retry overwrites rather than duplicates. Incidents record which files they have
+  counted, so a retried file never inflates the occurrence count.
+- **Atomic counters.** Occurrences are incremented with DynamoDB `ADD` under a condition expression, so
+  concurrent Lambdas can't lose updates. State transitions are conditional too, so an incident can't be
+  acknowledged twice (409).
+- **Retries and a dead-letter queue.** Lambda retries a failed file twice, then parks the event in SQS.
+- **Monitoring the monitor.** CloudWatch alarms on processor errors and on DLQ depth publish to the same SNS topic.
+
+### Security and privacy
+
+- Cognito sign-in; API Gateway verifies the JWT before any code runs; role permissions are checked in
+  [backend/handlers/auth.py](backend/handlers/auth.py).
+- Least-privilege IAM: each Lambda gets exactly the DynamoDB/S3/SNS actions it calls, nothing more
+  (the API can only write under `raw-logs/simulations/`).
+- Emails, card numbers and IP addresses in log messages are masked **before** storage; stored IPs keep
+  only the subnet. Security incidents keep the full attacker IP because responders need it.
+- S3 and DynamoDB encrypted at rest; the bucket blocks public access; the dashboard bucket is private
+  behind CloudFront Origin Access Control; API throttling at the gateway.
+- The emulator's role header is honoured only when `CLOUDLOG_LOCAL_MODE=1`.
+
+---
+
+## How this maps to the PAMCA601 syllabus
+
+| Module | Topic | Where it is in CloudLog |
+| --- | --- | --- |
+| 1 | Service models, deployment model | FaaS (Lambda), managed NoSQL and storage (DynamoDB, S3) in a public cloud; see [docs/architecture.md](docs/architecture.md) |
+| 1 | Virtualization | Lambda runs each function in a Firecracker micro-VM; the emulator runs in a container |
+| 2 | Resource pooling, provisioning, scaling | On-demand DynamoDB, Lambda scales out per S3 event, no capacity to plan |
+| 2 | Multi-tenancy | One table holds every service's logs, partitioned by `service`; per-day GSI for the shared feed |
+| 2 | Zero-downtime design | Async retries + DLQ, idempotent writes, point-in-time recovery on incidents |
+| 2 | Load control, CDN | API Gateway throttling; dashboard served from CloudFront edge locations |
+| 2 | Storage optimisation | DynamoDB TTL, S3 lifecycle to Infrequent Access then expiry |
+| 3 | MapReduce | Dashboard statistics: [backend/analytics/mapreduce.py](backend/analytics/mapreduce.py) |
+| 3 | Microservices, serverless, event processing | Two independent Lambdas joined by S3 events, not calls |
+| 3 | Infrastructure as Code (Terraform) | [infrastructure/terraform/](infrastructure/terraform/) defines every resource |
+| 3 | Git, CI, automated testing | [.github/workflows/ci.yml](.github/workflows/ci.yml): lint, 80 unit tests with emulated AWS, Terraform validate, image build |
+| 3 | Containers and orchestration | [Dockerfile](Dockerfile), [docker-compose.yml](docker-compose.yml), [deploy/k8s/cloudlog.yaml](deploy/k8s/cloudlog.yaml) |
+| 4 | Threat detection | Brute-force rule, security incident category |
+| 4 | Network, host, application security | Gateway JWT check, private buckets + OAC, IAM least privilege, input validation |
+| 4 | Identity and access management | Cognito groups → Admin / Analyst / Viewer permissions |
+| 4 | Zero trust | Every request authenticated at the gateway and authorised again in the Lambda |
+| 4 | Privacy in the cloud | PII masking before storage, IP minimisation, TTL-based deletion |
+| 5 | Edge computing and IoT | IoT cold-chain scenario: an edge gateway forwarding sensor telemetry to the cloud pipeline |
+
+---
+
+## Deploy to AWS
+
+Prerequisites: AWS CLI with a profile (the Terraform default is `terraform`), Terraform ≥ 1.5, Node 22, Python 3.11+.
 
 ```bash
-.venv/bin/pytest -v
-```
-All 70 tests pass in ~4 seconds without needing internet access or active AWS credentials.
+cd infrastructure/terraform
+AWS_PROFILE=terraform terraform init
+AWS_PROFILE=terraform terraform apply                 # ~5 min, CloudFront is the slow part
+# optional: -var alert_email=you@example.com  (confirm the SNS email you receive)
 
-### Run Automated End-to-End AWS Integration Test
-Verify the real AWS cloud infrastructure end-to-end:
+cd ../..
+AWS_PROFILE=terraform ./scripts/deploy_dashboard.sh    # builds and publishes the dashboard
+```
+
+The last line printed is the dashboard URL. Demo accounts are created by Terraform:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin | `admin@cloudlog.local` | `CloudLogAdmin#2026` |
+| Analyst | `analyst@cloudlog.local` | `CloudLogAnalyst#2026` |
+| Viewer | `viewer@cloudlog.local` | `CloudLogViewer#2026` |
+
+To run the dashboard locally against AWS instead, put the output of
+`terraform output -raw frontend_env` into `frontend/.env.local` and run `npm run dev`.
+
+**Check the deployment end to end:**
 
 ```bash
 AWS_PROFILE=terraform .venv/bin/python scripts/test_e2e_aws.py
 ```
-This script uploads real logs to S3, asserts that DynamoDB recorded the events, tests API Gateway endpoints, and validates RBAC permissions.
+
+**Upload a log file directly to S3** (no dashboard, no API, just the S3 trigger):
+
+```bash
+AWS_PROFILE=terraform .venv/bin/python scripts/upload_logs.py --scenario brute-force
+AWS_PROFILE=terraform .venv/bin/python scripts/upload_logs.py --file my-service.jsonl
+```
+
+**Tear it all down** when you're finished so nothing keeps billing:
+
+```bash
+cd infrastructure/terraform && AWS_PROFILE=terraform terraform destroy
+```
+
+Everything used fits in the AWS Free Tier at demo volumes; with no traffic the cost is effectively zero.
 
 ---
 
-## How to Stop Billing (Destroy Infrastructure)
+## Log format
 
-When you are done evaluating or presenting the project, you can destroy all AWS resources with a single command to ensure **$0 future charges**:
+One JSON object per line (`.jsonl`). Required: `timestamp` (ISO-8601), `service`, `level`
+(`INFO`, `WARNING`, `ERROR`, `CRITICAL`), `message`. Optional: `error_code`, `endpoint`, `ip_address`, `request_id`.
 
-```bash
-cd infrastructure/terraform
-AWS_PROFILE=terraform terraform destroy -auto-approve
+```json
+{"timestamp": "2026-10-10T09:41:07.120Z", "service": "payment-gateway", "level": "ERROR", "message": "Card capture timed out after 5012ms", "error_code": "PAYMENT_GATEWAY_TIMEOUT"}
 ```
 
-All S3 buckets, DynamoDB tables, Lambdas, and Cognito pools will be cleanly removed.
+---
 
+## Project layout
+
+```
+backend/
+  analyzer/      parser.py (validate, normalise, fingerprint), privacy.py (PII masking), detector.py (rules)
+  storage/       DynamoDB repositories: events.py, incidents.py (lifecycle), runs.py
+  alerts/        sns.py
+  analytics/     mapreduce.py
+  simulator/     scenarios.py (the failure scenarios)
+  handlers/      processor.py and api.py: the two Lambda entry points; auth.py (RBAC)
+  local/         emulator.py, resources.py: the offline AWS stack
+frontend/src/
+  pages/         Overview, Incidents, Logs, Pipeline, Simulator, Login
+  components/    PipelineMap (live architecture), SignalChart, IncidentDrawer, LogLines, ...
+  lib/           api.js, auth.js (Cognito or local roles), hooks.js (polling)
+infrastructure/terraform/   every AWS resource
+deploy/k8s/                 Kubernetes manifest for the emulator image
+scripts/                    upload_logs.py, deploy_dashboard.sh, test_e2e_aws.py
+tests/unit/                 80 tests, all against emulated AWS
+```
+
+## Tests
+
+```bash
+.venv/bin/pytest          # 80 tests, ~10 s, no network or AWS credentials needed
+.venv/bin/ruff check backend tests scripts
+cd frontend && npm run lint && npm run build
+```

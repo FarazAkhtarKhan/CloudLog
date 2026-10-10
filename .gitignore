@@ -87,3 +87,7 @@ yarn-error.log*
 .parcel-cache/
 .next/
 out/
+
+# Terraform plans can contain secrets (e.g. Cognito demo passwords)
+tfplan
+*.tfplan

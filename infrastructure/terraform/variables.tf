@@ -42,7 +42,7 @@ variable "log_retention_in_days" {
 
 variable "lambda_memory_size" {
   type        = number
-  description = "Allocated memory size in MB for the ingestion processor Lambda"
+  description = "Memory in MB for both Lambda functions (CPU scales with memory)"
   default     = 256
 }
 
@@ -56,4 +56,16 @@ variable "alert_email" {
   type        = string
   description = "Optional email address to receive real-time notifications for CRITICAL incidents. Left empty by default."
   default     = ""
+}
+
+variable "runs_table_name" {
+  type        = string
+  description = "Name of the DynamoDB table for pipeline-run records"
+  default     = "cloudlog_pipeline_runs"
+}
+
+variable "enable_dashboard_hosting" {
+  type        = bool
+  description = "Host the built dashboard on S3 + CloudFront. Set false to run it only from localhost."
+  default     = true
 }

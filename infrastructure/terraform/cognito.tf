@@ -2,17 +2,17 @@
 resource "aws_cognito_user_pool" "auth_pool" {
   name = "${var.project_name}-users-${var.environment}"
 
-  # Password policy appropriate for student project demonstration
   password_policy {
-    minimum_length    = 8
-    require_lowercase = false
-    require_numbers   = false
-    require_symbols   = false
-    require_uppercase = false
+    minimum_length    = 12
+    require_lowercase = true
+    require_numbers   = true
+    require_symbols   = true
+    require_uppercase = true
   }
 
+  # Accounts are created by an administrator (or Terraform), never by self sign-up.
   admin_create_user_config {
-    allow_admin_create_user_only = false
+    allow_admin_create_user_only = true
   }
 
   auto_verified_attributes = []
@@ -28,7 +28,6 @@ resource "aws_cognito_user_pool_client" "web_client" {
   explicit_auth_flows = [
     "ALLOW_USER_PASSWORD_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_ADMIN_USER_PASSWORD_AUTH"
   ]
 
   prevent_user_existence_errors = "ENABLED"
@@ -38,21 +37,21 @@ resource "aws_cognito_user_pool_client" "web_client" {
 resource "aws_cognito_user_group" "admin" {
   name         = "Admin"
   user_pool_id = aws_cognito_user_pool.auth_pool.id
-  description  = "Full administrative access to view and resolve incidents"
+  description  = "Analyst permissions plus resetting demo data"
   precedence   = 1
 }
 
 resource "aws_cognito_user_group" "analyst" {
   name         = "Analyst"
   user_pool_id = aws_cognito_user_pool.auth_pool.id
-  description  = "Operational access to view telemetry and resolve incidents"
+  description  = "View everything, run simulations, acknowledge and resolve incidents"
   precedence   = 2
 }
 
 resource "aws_cognito_user_group" "viewer" {
   name         = "Viewer"
   user_pool_id = aws_cognito_user_pool.auth_pool.id
-  description  = "Read-only access to view logs and incidents without modification"
+  description  = "Read-only access to logs, incidents and pipeline runs"
   precedence   = 3
 }
 

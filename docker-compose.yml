@@ -1,0 +1,8 @@
+# docker compose up --build   (or: podman compose up --build)
+services:
+  cloudlog:
+    build: .
+    image: cloudlog-emulator:latest
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

@@ -42,3 +42,24 @@ resource "aws_s3_bucket_notification" "log_upload_notification" {
 
   depends_on = [aws_lambda_permission.s3_invoke_permission]
 }
+
+# Storage tiering: raw files are read once by Lambda, so move them to cheaper
+# Infrequent Access after 30 days and delete them after 90.
+resource "aws_s3_bucket_lifecycle_configuration" "log_bucket_lifecycle" {
+  bucket = aws_s3_bucket.log_bucket.id
+
+  rule {
+    id     = "tier-and-expire-raw-logs"
+    status = "Enabled"
+    filter {
+      prefix = "raw-logs/"
+    }
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+    expiration {
+      days = 90
+    }
+  }
+}

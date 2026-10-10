@@ -1,25 +1,30 @@
-# HTTP API Gateway (v2) for CloudLog Dashboard
+# HTTP API (v2): cheaper and lower latency than REST APIs, with a native JWT authorizer.
 resource "aws_apigatewayv2_api" "http_api" {
   name          = "${var.project_name}-http-api-${var.environment}"
   protocol_type = "HTTP"
-  description   = "Serverless HTTP API for CloudLog telemetry and incident management"
+  description   = "CloudLog dashboard API"
 
   cors_configuration {
-    allow_headers = ["content-type", "authorization", "x-user-role"]
-    allow_methods = ["GET", "PATCH", "POST", "OPTIONS"]
+    allow_headers = ["content-type", "authorization"]
+    allow_methods = ["GET", "POST", "PATCH", "OPTIONS"]
     allow_origins = ["*"]
     max_age       = 300
   }
 }
 
-# Auto-deploy default stage with access logging
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http_api.id
   name        = "$default"
   auto_deploy = true
+
+  # Protects the Lambda (and the bill) from runaway clients.
+  default_route_settings {
+    throttling_rate_limit  = 50
+    throttling_burst_limit = 100
+  }
 }
 
-# Cognito JWT Authorizer
+# Cognito tokens are verified here, at the edge, before any Lambda runs.
 resource "aws_apigatewayv2_authorizer" "jwt_auth" {
   api_id           = aws_apigatewayv2_api.http_api.id
   authorizer_type  = "JWT"
@@ -32,7 +37,6 @@ resource "aws_apigatewayv2_authorizer" "jwt_auth" {
   }
 }
 
-# Lambda Proxy Integration
 resource "aws_apigatewayv2_integration" "api_lambda" {
   api_id                 = aws_apigatewayv2_api.http_api.id
   integration_type       = "AWS_PROXY"
@@ -41,17 +45,20 @@ resource "aws_apigatewayv2_integration" "api_lambda" {
   payload_format_version = "2.0"
 }
 
-# Protected Routes requiring Cognito JWT
+# Every route requires a valid JWT. Role checks happen in backend/handlers/auth.py.
 resource "aws_apigatewayv2_route" "routes" {
   for_each = toset([
+    "GET /me",
+    "GET /overview",
     "GET /events",
-    "GET /events/critical",
     "GET /incidents",
     "GET /incidents/{id}",
     "PATCH /incidents/{id}",
-    "GET /statistics",
-    "GET /services",
-    "POST /simulate"
+    "GET /pipeline/runs",
+    "GET /rules",
+    "GET /simulator/scenarios",
+    "POST /simulator/runs",
+    "POST /admin/reset",
   ])
 
   api_id             = aws_apigatewayv2_api.http_api.id
@@ -59,11 +66,4 @@ resource "aws_apigatewayv2_route" "routes" {
   target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
   authorizer_id      = aws_apigatewayv2_authorizer.jwt_auth.id
   authorization_type = "JWT"
-}
-
-# Unauthenticated Fallback route for CORS preflight OPTIONS requests
-resource "aws_apigatewayv2_route" "options_fallback" {
-  api_id    = aws_apigatewayv2_api.http_api.id
-  route_key = "OPTIONS /{proxy+}"
-  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 }

@@ -1,198 +1,131 @@
 """
-Pure Python Log Analyzer & Parser.
-Extracts, validates, classifies, and enriches JSONL log events without external cloud SDKs.
+Pure-Python log parser (no AWS calls).
+
+Each JSONL line is validated against the log contract, normalised, masked for
+PII and given two identifiers:
+
+* event_id    - SHA-256 of (bucket, key, line). Re-processing the same file after a
+                Lambda retry yields the same IDs, so DynamoDB writes are idempotent.
+* fingerprint - SHA-256 of (service, error code or message "shape"). Lines that
+                describe the same problem share a fingerprint, so they group into
+                one incident instead of flooding the queue.
 """
 import hashlib
 import json
-from datetime import datetime, timezone
-from typing import Any, Optional, Set
+import re
+from collections.abc import Iterable
+from datetime import UTC, datetime
 
-from backend.analyzer.models import AnalysisResult, LogEvent, S3Context
-from backend.common.config import (
-    SEVERITY_CRITICAL,
-    SEVERITY_ERROR,
-    SEVERITY_INFO,
-    SEVERITY_WARNING,
-    VALID_SEVERITIES,
+from backend.analyzer.models import Batch, LogEvent, Rejection
+from backend.analyzer.privacy import redact
+from backend.config import SEVERITIES
+
+REQUIRED_FIELDS = ("timestamp", "service", "level", "message")
+
+# Variable parts of a message that should not split a fingerprint
+_VOLATILE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # UUIDs
+    r"|\b[0-9a-f]{12,}\b"                                            # hex ids
+    r"|\d+(?:\.\d+)*",                                               # numbers, IPs
+    re.IGNORECASE,
 )
 
-REQUIRED_FIELDS: Set[str] = {"timestamp", "service", "level", "message"}
+
+def _sha(text: str, length: int = 16) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:length]
 
 
-def generate_event_id(bucket_name: str, object_key: str, line_number: int) -> str:
-    """
-    Generate a deterministic 16-hex character event ID based on S3 location metadata.
-    Format: evt_ + SHA256(bucket:key:line_number)[:16]
-    Provides idempotent re-processing for AWS Lambda retries.
-    """
-    raw_identifier = f"{bucket_name}:{object_key}:{line_number}"
-    sha256_hash = hashlib.sha256(raw_identifier.encode("utf-8")).hexdigest()
-    return f"evt_{sha256_hash[:16]}"
+def event_id_for(bucket: str, key: str, line_number: int) -> str:
+    return "evt_" + _sha(f"{bucket}:{key}:{line_number}")
 
 
-def validate_iso8601_timestamp(ts_value: Any) -> bool:
-    """Validate that a timestamp value is a valid ISO 8601 string."""
-    if not isinstance(ts_value, str) or not ts_value.strip():
-        return False
-    try:
-        # Normalize trailing 'Z' to UTC '+00:00' for Python fromisoformat parser
-        normalized = ts_value.strip().replace("Z", "+00:00")
-        datetime.fromisoformat(normalized)
-        return True
-    except (ValueError, TypeError):
-        return False
+def message_shape(message: str) -> str:
+    """'Timeout after 5012ms on 10.0.0.4' -> 'timeout after #ms on #'."""
+    return _VOLATILE.sub("#", message.lower()).strip()
 
 
-def _clean_optional_string(raw_dict: dict, field_name: str) -> Optional[str]:
-    """Helper to extract non-empty optional string fields."""
-    val = raw_dict.get(field_name)
-    if val is None:
+def fingerprint_for(service: str, error_code: str | None, message: str) -> str:
+    basis = error_code.upper() if error_code else message_shape(message)
+    return _sha(f"{service}|{basis}", 12)
+
+
+def normalise_timestamp(value: object) -> str | None:
+    """Parse ISO-8601 and return UTC 'YYYY-MM-DDTHH:MM:SS.mmmZ' (sortable as a string)."""
+    if not isinstance(value, str) or not value.strip():
         return None
-    if isinstance(val, str) and val.strip():
-        return val.strip()
-    return None
-
-
-def analyze_log_line(raw_line: str, context: S3Context) -> AnalysisResult:
-    """
-    Parse, validate, classify, and enrich a single raw JSONL line.
-
-    Args:
-        raw_line: Raw text line containing a single JSON log record.
-        context: S3 origin metadata (bucket_name, object_key, line_number).
-
-    Returns:
-        AnalysisResult containing either a validated LogEvent or structured error details.
-    """
-    source_uri = context.source_s3_uri
-    line_num = context.line_number
-
-    # 1. Check for empty or whitespace-only lines
-    if not isinstance(raw_line, str) or not raw_line.strip():
-        return AnalysisResult(
-            is_valid=False,
-            error_type="EMPTY_LINE",
-            error_message="Log line is empty or contains only whitespace",
-            line_number=line_num,
-            source_s3_uri=source_uri,
-        )
-
-    # 2. Parse JSON syntax
     try:
-        payload = json.loads(raw_line)
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _text(payload: dict, name: str) -> str | None:
+    value = payload.get(name)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def parse_line(raw: str, bucket: str, key: str, line_number: int) -> LogEvent | Rejection:
+    """Validate one line. Returns a LogEvent, or a Rejection explaining why not."""
+    def reject(reason: str, detail: str) -> Rejection:
+        return Rejection(line_number=line_number, reason=reason, detail=detail)
+
+    if not raw or not raw.strip():
+        return reject("EMPTY_LINE", "Line is blank")
+    try:
+        payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        return AnalysisResult(
-            is_valid=False,
-            error_type="INVALID_JSON",
-            error_message=f"JSON decoding error: {exc.msg} (line {exc.lineno}, col {exc.colno})",
-            line_number=line_num,
-            source_s3_uri=source_uri,
-        )
-
+        return reject("INVALID_JSON", f"{exc.msg} at column {exc.colno}")
     if not isinstance(payload, dict):
-        return AnalysisResult(
-            is_valid=False,
-            error_type="INVALID_JSON_OBJECT",
-            error_message="Log line must be a JSON object (key-value dictionary)",
-            line_number=line_num,
-            source_s3_uri=source_uri,
-        )
+        return reject("INVALID_JSON", "Line is valid JSON but not an object")
 
-    # 3. Check for required fields
-    missing_fields = sorted(list(REQUIRED_FIELDS - payload.keys()))
-    if missing_fields:
-        return AnalysisResult(
-            is_valid=False,
-            error_type="MISSING_REQUIRED_FIELDS",
-            error_message=f"Missing required field(s): {', '.join(missing_fields)}",
-            line_number=line_num,
-            source_s3_uri=source_uri,
-        )
+    missing = [f for f in REQUIRED_FIELDS if f not in payload]
+    if missing:
+        return reject("MISSING_FIELDS", "Missing " + ", ".join(missing))
 
-    # 4. Validate service name
-    service = payload.get("service")
-    if not isinstance(service, str) or not service.strip():
-        return AnalysisResult(
-            is_valid=False,
-            error_type="EMPTY_SERVICE",
-            error_message="Field 'service' must be a non-empty string",
-            line_number=line_num,
-            source_s3_uri=source_uri,
-        )
-    service = service.strip()
+    service, message = _text(payload, "service"), _text(payload, "message")
+    if not service:
+        return reject("MISSING_FIELDS", "'service' is empty")
+    if not message:
+        return reject("MISSING_FIELDS", "'message' is empty")
 
-    # 5. Validate log message
-    message = payload.get("message")
-    if not isinstance(message, str) or not message.strip():
-        return AnalysisResult(
-            is_valid=False,
-            error_type="EMPTY_MESSAGE",
-            error_message="Field 'message' must be a non-empty string",
-            line_number=line_num,
-            source_s3_uri=source_uri,
-        )
-    message = message.strip()
+    level = str(payload.get("level", "")).strip().upper()
+    if level not in SEVERITIES:
+        return reject("INVALID_LEVEL", f"'{payload.get('level')}' is not one of {', '.join(SEVERITIES)}")
 
-    # 6. Validate log level
-    raw_level = payload.get("level")
-    if not isinstance(raw_level, str) or raw_level.strip().upper() not in VALID_SEVERITIES:
-        allowed = ", ".join(sorted(list(VALID_SEVERITIES)))
-        return AnalysisResult(
-            is_valid=False,
-            error_type="INVALID_LOG_LEVEL",
-            error_message=f"Invalid log level '{raw_level}'. Allowed levels: {allowed}",
-            line_number=line_num,
-            source_s3_uri=source_uri,
-        )
-    level = raw_level.strip().upper()
+    timestamp = normalise_timestamp(payload.get("timestamp"))
+    if not timestamp:
+        return reject("INVALID_TIMESTAMP", f"'{payload.get('timestamp')}' is not ISO-8601")
 
-    # 7. Validate timestamp format
-    raw_timestamp = payload.get("timestamp")
-    if not validate_iso8601_timestamp(raw_timestamp):
-        return AnalysisResult(
-            is_valid=False,
-            error_type="INVALID_TIMESTAMP",
-            error_message=f"Invalid ISO 8601 timestamp format: '{raw_timestamp}'",
-            line_number=line_num,
-            source_s3_uri=source_uri,
-        )
-    timestamp = str(raw_timestamp).strip()
+    error_code = _text(payload, "error_code")
+    masked_message, redacted = redact(message)
 
-    # 8. Extract optional contextual fields
-    error_code = _clean_optional_string(payload, "error_code")
-    endpoint = _clean_optional_string(payload, "endpoint")
-    ip_address = _clean_optional_string(payload, "ip_address")
-
-    # 9. Generate deterministic event_id and DynamoDB sort key
-    event_id = generate_event_id(context.bucket_name, context.object_key, line_num)
-    sort_key = f"{timestamp}#{event_id}"
-
-    # 10. Operational classification
-    is_incident = level in {SEVERITY_ERROR, SEVERITY_CRITICAL}
-    requires_alert = level == SEVERITY_CRITICAL
-
-    processed_at = datetime.now(timezone.utc).isoformat()
-
-    event = LogEvent(
-        event_id=event_id,
+    return LogEvent(
+        event_id=event_id_for(bucket, key, line_number),
         service=service,
         timestamp=timestamp,
-        sort_key=sort_key,
         level=level,
-        message=message,
-        source_s3_uri=source_uri,
-        line_number=line_num,
-        processed_at=processed_at,
-        is_incident=is_incident,
-        requires_alert=requires_alert,
+        message=masked_message,
+        fingerprint=fingerprint_for(service, error_code, masked_message),
+        source_s3_uri=f"s3://{bucket}/{key}",
+        line_number=line_number,
         error_code=error_code,
-        endpoint=endpoint,
-        ip_address=ip_address,
+        endpoint=_text(payload, "endpoint"),
+        ip_address=_text(payload, "ip_address"),
+        request_id=_text(payload, "request_id"),
+        pii_redacted=redacted,
     )
 
-    return AnalysisResult(
-        is_valid=True,
-        event=event,
-        line_number=line_num,
-        source_s3_uri=source_uri,
-    )
+
+def parse_lines(lines: Iterable[str], bucket: str, key: str) -> Batch:
+    """Stream a file line by line; one bad line never aborts the rest."""
+    batch = Batch(source_s3_uri=f"s3://{bucket}/{key}")
+    for line_number, raw in enumerate(lines, start=1):
+        result = parse_line(raw, bucket, key, line_number)
+        if isinstance(result, LogEvent):
+            batch.events.append(result)
+        else:
+            batch.rejections.append(result)
+    return batch

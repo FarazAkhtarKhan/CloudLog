@@ -1,0 +1,1 @@
+"""Amazon SNS alert publishing."""
