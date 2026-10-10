@@ -179,75 +179,161 @@ mean time to acknowledge (MTTA) and mean time to resolve (MTTR).
 ## Deploy to your own AWS account
 
 Everything below works from a fresh `git clone`. It creates the resources in **your** AWS account; nothing
-is shared with whoever published the repo.
+is shared with whoever published the repo. Allow about 20 minutes the first time.
 
-### 1. One-time setup
+The steps use an **AWS CLI named profile**: a saved set of credentials with a name. The examples call it
+`cloudlog`; any name works (the original author's is called `terraform`), as long as you use the same name
+everywhere.
 
-You need:
+### Step 1. Install the tools
 
 | Tool | Check with | Get it |
 | --- | --- | --- |
-| An AWS account | | <https://aws.amazon.com/free> |
 | AWS CLI v2 | `aws --version` | <https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html> |
 | Terraform 1.5+ | `terraform -version` | <https://developer.hashicorp.com/terraform/install> |
 | Node.js 22 | `node --version` | <https://nodejs.org> |
 | Python 3.11+ | `python3 --version` | <https://www.python.org/downloads/> |
+| Git | `git --version` | <https://git-scm.com/downloads> |
 
-Give the AWS CLI credentials. In the AWS console, create an IAM user (or use IAM Identity Center) with
-`AdministratorAccess` for the duration of the coursework, create an access key, then run:
+You also need an AWS account: <https://aws.amazon.com/free>.
+
+### Step 2. Create an access key in the AWS console
+
+Don't use the account's root user for this. Create a separate IAM user:
+
+1. Sign in to the AWS console and open **IAM** → **Users** → **Create user**.
+2. Name it, for example, `cloudlog-deployer`. Leave console access unticked. Click **Next**.
+3. Choose **Attach policies directly**, tick **AdministratorAccess**, click **Next**, then **Create user**.
+   (Terraform creates IAM roles, Lambda, DynamoDB, S3, SNS, SQS, API Gateway, Cognito, CloudWatch and
+   CloudFront, so it needs broad rights. Delete this user when the coursework is over.)
+4. Open the new user → **Security credentials** → **Create access key**.
+5. Choose **Command Line Interface (CLI)**, tick the confirmation, **Next**, **Create access key**.
+6. Copy the **Access key ID** and **Secret access key**. The secret is shown only once.
+
+Never commit these keys to git or paste them into a file in this repository.
+
+### Step 3. Save the key as a named profile
 
 ```bash
-aws configure                     # paste the access key and secret; region: ap-south-1
-aws sts get-caller-identity       # should print your account ID
+aws configure --profile cloudlog
 ```
 
-If you keep several AWS accounts, use a named profile (`aws configure --profile cloudlog`) and put
-`AWS_PROFILE=cloudlog` in front of every command below, or `export AWS_PROFILE=cloudlog` once.
+Answer the four prompts:
 
-Install the project's own dependencies:
+```
+AWS Access Key ID [None]:      <paste the access key ID>
+AWS Secret Access Key [None]:  <paste the secret>
+Default region name [None]:    ap-south-1
+Default output format [None]:  json
+```
+
+This writes the key to `~/.aws/credentials` and the region to `~/.aws/config`, outside the project.
+
+Check that the profile works:
 
 ```bash
-git clone https://github.com/FarazAkhtarKhan/CloudLog.git && cd CloudLog
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+aws sts get-caller-identity --profile cloudlog
+```
+
+It should print your 12-digit account ID and the `cloudlog-deployer` user. If it prints an error, fix it
+now; nothing later will work without this.
+
+> Using AWS IAM Identity Center (SSO) instead of access keys? Run `aws configure sso --profile cloudlog`
+> once, and `aws sso login --profile cloudlog` whenever the session expires. Everything else is the same.
+
+### Step 4. Tell your terminal to use the profile
+
+Terraform, the AWS CLI and the Python scripts all read the `AWS_PROFILE` environment variable. Set it **once
+per terminal window**, in the syntax of your shell:
+
+| Shell | Command |
+| --- | --- |
+| bash, zsh (Linux, macOS, Git Bash, WSL) | `export AWS_PROFILE=cloudlog` |
+| fish | `set -x AWS_PROFILE cloudlog` |
+| PowerShell (Windows) | `$env:AWS_PROFILE = "cloudlog"` |
+
+Confirm it took effect. With no `--profile` flag this time:
+
+```bash
+aws sts get-caller-identity
+```
+
+A new terminal window starts without the variable, so set it again there. If you would rather not set it,
+put it in front of each command instead, for example `AWS_PROFILE=cloudlog terraform apply`. For Terraform
+only, `-var aws_profile=cloudlog` also works.
+
+**Which commands need the profile:**
+
+| Needs AWS credentials (set `AWS_PROFILE` first) | Doesn't need them |
+| --- | --- |
+| `terraform init`, `plan`, `apply`, `output`, `destroy` | `npm run dev`, `npm run dev:aws`, `npm run build` |
+| `scripts/deploy_dashboard.sh` | the offline emulator |
+| `scripts/test_e2e_aws.py`, `scripts/upload_logs.py` | `pytest` (uses emulated AWS) |
+| any `aws ...` command | |
+
+The dashboard itself never uses your profile. In the browser you sign in through Cognito instead.
+
+### Step 5. Get the code and install dependencies
+
+```bash
+git clone https://github.com/FarazAkhtarKhan/CloudLog.git
+cd CloudLog
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
 npm --prefix frontend install
 ```
 
-### 2. Create the infrastructure
+On Windows PowerShell the virtual-environment path is `.venv\Scripts\pip` instead of `.venv/bin/pip`.
+
+### Step 6. Create the infrastructure
+
+In a terminal where `AWS_PROFILE` is set:
 
 ```bash
 cd infrastructure/terraform
-terraform init
-terraform plan          # review: about 57 resources
-terraform apply         # type "yes"; ~5 minutes, CloudFront is the slow part
+terraform init        # downloads the AWS provider; run once per clone
+terraform plan        # preview: about 57 resources to add, 0 to change, 0 to destroy
+terraform apply       # shows the plan again; type yes
 ```
 
-Options (add to `plan` and `apply`):
+`apply` takes about 5 minutes; most of it is CloudFront. It ends with `Apply complete!` and a list of
+outputs (API URL, bucket names and so on).
+
+Optional settings. Pass the same ones to `plan`, `apply` **and** `destroy`:
 
 | Option | Effect |
 | --- | --- |
-| `-var alert_email=you@example.com` | Critical alerts are emailed to you (click the confirmation link SNS sends) |
+| `-var alert_email=you@example.com` | Critical alerts are emailed to you. AWS sends a confirmation email first; click its link |
 | `-var aws_region=us-east-1` | Deploy to another region (default `ap-south-1`, Mumbai) |
-| `-var enable_dashboard_hosting=false` | Skip CloudFront; run the dashboard from localhost only |
+| `-var enable_dashboard_hosting=false` | Skip CloudFront and only run the dashboard from localhost |
 
-S3 bucket names are made globally unique with a random suffix, so two people deploying never collide.
+Terraform records what it created in `infrastructure/terraform/terraform.tfstate`. Keep that file: it is
+how `destroy` knows what to delete. It is git-ignored because it contains secrets, so don't commit it.
 
-### 3. Run the dashboard
+### Step 7. Run the dashboard against AWS
 
 The dashboard has two modes. `npm run dev` always uses the offline emulator; `npm run dev:aws` uses your
 AWS stack, with settings from `frontend/.env.aws.local`. Switching never needs a file edit.
 
-**Locally, against your AWS stack:**
+Still in `infrastructure/terraform`, write the settings file, then start the dashboard:
 
 ```bash
-terraform output -raw frontend_env > ../../frontend/.env.aws.local   # still in infrastructure/terraform
-cd ../../frontend && npm run dev:aws                                 # http://localhost:5173
+terraform output -raw frontend_env > ../../frontend/.env.aws.local
+cd ../../frontend
+npm run dev:aws
 ```
 
-**Or publish it** to a public HTTPS URL on CloudFront (run from the project root):
+Open <http://localhost:5173>. The bottom-left corner should say **AWS ap-south-1**. If it says
+**Offline emulator**, you ran `npm run dev` instead of `npm run dev:aws`.
+
+**Or publish it to the internet** on CloudFront. From the project root, with `AWS_PROFILE` set:
 
 ```bash
-./scripts/deploy_dashboard.sh     # prints the URL when finished
+./scripts/deploy_dashboard.sh     # builds, uploads to S3, prints the https://....cloudfront.net URL
 ```
+
+This is a bash script: on Windows, run it from Git Bash or WSL. A brand-new CloudFront URL can take a few
+minutes to start answering.
 
 Sign in with a demo account that Terraform created:
 
@@ -260,32 +346,59 @@ Sign in with a demo account that Terraform created:
 These passwords are public because they are in this repository. They are fine for a demo, but destroy the
 stack afterwards, or change them in `infrastructure/terraform/cognito.tf` before applying.
 
-### 4. Check it end to end
+### Step 8. Check that it works
+
+From the project root, with `AWS_PROFILE` set:
 
 ```bash
-.venv/bin/python scripts/test_e2e_aws.py                        # signs in, runs a scenario, checks RBAC
-.venv/bin/python scripts/upload_logs.py --scenario brute-force  # S3 upload with no dashboard or API
+.venv/bin/python scripts/test_e2e_aws.py
 ```
 
-### 5. Tear it down
+It signs in to Cognito, runs the database-outage scenario through API Gateway → S3 → Lambda, waits for the
+processor, and checks incidents, the SNS alert and Viewer permissions. Every line should say `PASS`.
+
+To send a log file straight to S3, the way a real service would (no dashboard or API involved):
 
 ```bash
-cd infrastructure/terraform && terraform destroy
+.venv/bin/python scripts/upload_logs.py --scenario brute-force
 ```
 
-At demo volumes everything fits in the AWS Free Tier, and with no traffic the running cost is effectively
-zero, but destroying the stack when you're done is the only way to be certain.
+Watch it arrive on the dashboard's **Pipeline** page within a second or two. In the AWS console you can also
+see the work being done: **CloudWatch** → Log groups → `/aws/lambda/cloudlog-processor-dev`, and
+**DynamoDB** → Tables → `cloudlog_incidents`.
+
+### Step 9. After pulling new code
+
+Run `terraform apply` again, with `AWS_PROFILE` set. Terraform repackages the Lambda code and updates only
+what changed. If you publish the dashboard, run `./scripts/deploy_dashboard.sh` again too.
+
+### Step 10. Delete everything when you're finished
+
+In a terminal where `AWS_PROFILE` is set, with the same `-var` options you used for `apply`:
+
+```bash
+cd infrastructure/terraform
+terraform destroy     # type yes; 5-10 minutes because CloudFront must be disabled first
+```
+
+Don't cancel it partway. It ends with `Destroy complete!` and the number of resources removed. At demo volumes the
+stack fits in the AWS Free Tier and costs almost nothing while idle, but destroying it is the only way to be
+certain. Afterwards, delete the `cloudlog-deployer` IAM user if you no longer need it.
 
 ### Common problems
 
-| Symptom | Fix |
+| Symptom | Cause and fix |
 | --- | --- |
-| `No valid credential sources found` | Run `aws configure`, or set `AWS_PROFILE` to a profile that exists |
-| `AccessDenied` during apply | The IAM user needs permissions for every service listed in [the Terraform README](infrastructure/terraform/README.md) |
-| `EntityAlreadyExists` / `ResourceInUseException` | A previous CloudLog deploy still exists in this account and region: `terraform destroy` it first |
-| Dashboard says it can't reach the emulator | You ran `npm run dev`, which is the offline mode. Use `npm run dev:aws` for AWS |
-| Dashboard says it can't reach API Gateway | `frontend/.env.aws.local` is missing or stale; redo the `terraform output -raw frontend_env` step |
-| Sign-in says "Wrong email or password" | Use the demo accounts above exactly; Cognito is case-sensitive |
+| `No valid credential sources found` … `no EC2 IMDS role found` | This terminal has no `AWS_PROFILE`. Run step 4 again, then retry |
+| `The config profile (cloudlog) could not be found` | Typo in the name, or step 3 not done. `aws configure list-profiles` shows what exists |
+| `ExpiredToken` / `The SSO session has expired` | SSO profiles only: run `aws sso login --profile cloudlog` |
+| `InvalidClientTokenId` / `SignatureDoesNotMatch` | The saved key is wrong or was deleted. Create a new access key and repeat step 3 |
+| `AccessDenied` during apply | The IAM user lacks permissions. Attach `AdministratorAccess` (step 2) |
+| `EntityAlreadyExists` / `ResourceInUseException` | A previous CloudLog deploy still exists in this account and region. Destroy it first |
+| `destroy` says `No changes` but resources are still in AWS | You ran it from a different folder or clone, so it can't see the state file. Run it in the `infrastructure/terraform` folder you applied from |
+| Dashboard says it can't reach the emulator | You ran `npm run dev`, which is the offline mode. Use `npm run dev:aws` |
+| Dashboard says it can't reach API Gateway | `frontend/.env.aws.local` is missing or stale. Repeat the first command of step 7 |
+| Sign-in says "Wrong email or password" | Type the demo account exactly as in the table; Cognito is case-sensitive |
 
 ---
 
