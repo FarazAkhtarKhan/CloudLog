@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the dashboard against the deployed API and publish it to S3 + CloudFront.
-#   AWS_PROFILE=terraform ./scripts/deploy_dashboard.sh
+#   ./scripts/deploy_dashboard.sh        (uses your normal AWS credentials / AWS_PROFILE)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

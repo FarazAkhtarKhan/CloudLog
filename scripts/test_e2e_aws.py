@@ -2,7 +2,7 @@
 """
 End-to-end check of a real AWS deployment (run after `terraform apply`).
 
-    AWS_PROFILE=terraform .venv/bin/python scripts/test_e2e_aws.py
+    .venv/bin/python scripts/test_e2e_aws.py
 
   1. signs in to Cognito as the demo Analyst and Viewer
   2. runs the database-outage scenario through API Gateway (-> S3 -> Lambda)
@@ -55,7 +55,7 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 
 def main() -> None:
-    region, base, client_id = "ap-south-1", tf("api_gateway_endpoint"), tf("cognito_user_pool_client_id")
+    region, base, client_id = tf("aws_region"), tf("api_gateway_endpoint"), tf("cognito_user_pool_client_id")
     print(f"CloudLog end-to-end test against {base}")
     analyst, viewer = token(client_id, region, "Analyst"), token(client_id, region, "Viewer")
     check("Cognito issued tokens for Analyst and Viewer", bool(analyst and viewer))

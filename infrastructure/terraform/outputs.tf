@@ -1,3 +1,7 @@
+output "aws_region" {
+  value = var.aws_region
+}
+
 output "s3_log_bucket_name" {
   description = "Upload .jsonl log files here to trigger the processor"
   value       = aws_s3_bucket.log_bucket.id

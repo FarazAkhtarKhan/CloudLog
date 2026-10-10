@@ -176,21 +176,77 @@ mean time to acknowledge (MTTA) and mean time to resolve (MTTR).
 
 ---
 
-## Deploy to AWS
+## Deploy to your own AWS account
 
-Prerequisites: AWS CLI with a profile (the Terraform default is `terraform`), Terraform ≥ 1.5, Node 22, Python 3.11+.
+Everything below works from a fresh `git clone`. It creates the resources in **your** AWS account; nothing
+is shared with whoever published the repo.
+
+### 1. One-time setup
+
+You need:
+
+| Tool | Check with | Get it |
+| --- | --- | --- |
+| An AWS account | | <https://aws.amazon.com/free> |
+| AWS CLI v2 | `aws --version` | <https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html> |
+| Terraform 1.5+ | `terraform -version` | <https://developer.hashicorp.com/terraform/install> |
+| Node.js 22 | `node --version` | <https://nodejs.org> |
+| Python 3.11+ | `python3 --version` | <https://www.python.org/downloads/> |
+
+Give the AWS CLI credentials. In the AWS console, create an IAM user (or use IAM Identity Center) with
+`AdministratorAccess` for the duration of the coursework, create an access key, then run:
+
+```bash
+aws configure                     # paste the access key and secret; region: ap-south-1
+aws sts get-caller-identity       # should print your account ID
+```
+
+If you keep several AWS accounts, use a named profile (`aws configure --profile cloudlog`) and put
+`AWS_PROFILE=cloudlog` in front of every command below, or `export AWS_PROFILE=cloudlog` once.
+
+Install the project's own dependencies:
+
+```bash
+git clone https://github.com/FarazAkhtarKhan/CloudLog.git && cd CloudLog
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+npm --prefix frontend install
+```
+
+### 2. Create the infrastructure
 
 ```bash
 cd infrastructure/terraform
-AWS_PROFILE=terraform terraform init
-AWS_PROFILE=terraform terraform apply                 # ~5 min, CloudFront is the slow part
-# optional: -var alert_email=you@example.com  (confirm the SNS email you receive)
-
-cd ../..
-AWS_PROFILE=terraform ./scripts/deploy_dashboard.sh    # builds and publishes the dashboard
+terraform init
+terraform plan          # review: about 57 resources
+terraform apply         # type "yes"; ~5 minutes, CloudFront is the slow part
 ```
 
-The last line printed is the dashboard URL. Demo accounts are created by Terraform:
+Options (add to `plan` and `apply`):
+
+| Option | Effect |
+| --- | --- |
+| `-var alert_email=you@example.com` | Critical alerts are emailed to you (click the confirmation link SNS sends) |
+| `-var aws_region=us-east-1` | Deploy to another region (default `ap-south-1`, Mumbai) |
+| `-var enable_dashboard_hosting=false` | Skip CloudFront; run the dashboard from localhost only |
+
+S3 bucket names are made globally unique with a random suffix, so two people deploying never collide.
+
+### 3. Run the dashboard
+
+**Locally, against your AWS stack:**
+
+```bash
+terraform output -raw frontend_env > ../../frontend/.env.local    # still in infrastructure/terraform
+cd ../../frontend && npm run dev                                  # http://localhost:5173
+```
+
+**Or publish it** to a public HTTPS URL on CloudFront (run from the project root):
+
+```bash
+./scripts/deploy_dashboard.sh     # prints the URL when finished
+```
+
+Sign in with a demo account that Terraform created:
 
 | Role | Email | Password |
 | --- | --- | --- |
@@ -198,29 +254,34 @@ The last line printed is the dashboard URL. Demo accounts are created by Terrafo
 | Analyst | `analyst@cloudlog.local` | `CloudLogAnalyst#2026` |
 | Viewer | `viewer@cloudlog.local` | `CloudLogViewer#2026` |
 
-To run the dashboard locally against AWS instead, put the output of
-`terraform output -raw frontend_env` into `frontend/.env.local` and run `npm run dev`.
+These passwords are public because they are in this repository. They are fine for a demo, but destroy the
+stack afterwards, or change them in `infrastructure/terraform/cognito.tf` before applying.
 
-**Check the deployment end to end:**
-
-```bash
-AWS_PROFILE=terraform .venv/bin/python scripts/test_e2e_aws.py
-```
-
-**Upload a log file directly to S3** (no dashboard, no API, just the S3 trigger):
+### 4. Check it end to end
 
 ```bash
-AWS_PROFILE=terraform .venv/bin/python scripts/upload_logs.py --scenario brute-force
-AWS_PROFILE=terraform .venv/bin/python scripts/upload_logs.py --file my-service.jsonl
+.venv/bin/python scripts/test_e2e_aws.py                        # signs in, runs a scenario, checks RBAC
+.venv/bin/python scripts/upload_logs.py --scenario brute-force  # S3 upload with no dashboard or API
 ```
 
-**Tear it all down** when you're finished so nothing keeps billing:
+### 5. Tear it down
 
 ```bash
-cd infrastructure/terraform && AWS_PROFILE=terraform terraform destroy
+cd infrastructure/terraform && terraform destroy
 ```
 
-Everything used fits in the AWS Free Tier at demo volumes; with no traffic the cost is effectively zero.
+At demo volumes everything fits in the AWS Free Tier, and with no traffic the running cost is effectively
+zero, but destroying the stack when you're done is the only way to be certain.
+
+### Common problems
+
+| Symptom | Fix |
+| --- | --- |
+| `No valid credential sources found` | Run `aws configure`, or set `AWS_PROFILE` to a profile that exists |
+| `AccessDenied` during apply | The IAM user needs permissions for every service listed in [the Terraform README](infrastructure/terraform/README.md) |
+| `EntityAlreadyExists` / `ResourceInUseException` | A previous CloudLog deploy still exists in this account and region: `terraform destroy` it first |
+| Dashboard says it can't reach the emulator | `frontend/.env.local` is missing `VITE_MODE=aws`; redo the `terraform output -raw frontend_env` step |
+| Sign-in says "Wrong email or password" | Use the demo accounts above exactly; Cognito is case-sensitive |
 
 ---
 

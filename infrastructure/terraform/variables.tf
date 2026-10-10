@@ -6,8 +6,8 @@ variable "aws_region" {
 
 variable "aws_profile" {
   type        = string
-  description = "AWS CLI profile configured with credential_process"
-  default     = "terraform"
+  description = "Optional AWS CLI profile name. Leave null to use the standard credential chain (AWS_PROFILE, env vars, default profile, SSO)."
+  default     = null
 }
 
 variable "project_name" {

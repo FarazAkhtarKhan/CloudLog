@@ -4,12 +4,12 @@ Upload a log file straight to the S3 bucket, the way a real service would.
 This bypasses the dashboard and API entirely: the S3 event alone drives the pipeline.
 
     # a built-in scenario (see backend/simulator/scenarios.py)
-    AWS_PROFILE=terraform python scripts/upload_logs.py --scenario db-outage
+    python scripts/upload_logs.py --scenario db-outage
 
     # your own JSON Lines file
-    AWS_PROFILE=terraform python scripts/upload_logs.py --file my-logs.jsonl
+    python scripts/upload_logs.py --file my-logs.jsonl
 
-The bucket name is read from `terraform output` unless --bucket is given.
+The bucket and region are read from `terraform output` unless given as options.
 """
 import argparse
 import json
@@ -39,7 +39,7 @@ def main() -> None:
     source.add_argument("--scenario", choices=sorted(SCENARIOS))
     source.add_argument("--file", type=Path, help="a .jsonl file to upload")
     parser.add_argument("--bucket", help="defaults to the Terraform output s3_log_bucket_name")
-    parser.add_argument("--region", default="ap-south-1")
+    parser.add_argument("--region", help="defaults to the Terraform output aws_region")
     args = parser.parse_args()
 
     bucket = args.bucket or terraform_output("s3_log_bucket_name")
@@ -49,7 +49,8 @@ def main() -> None:
         body, name = args.file.read_text(encoding="utf-8"), args.file.stem
     key = f"raw-logs/uploads/{time.strftime('%Y/%m/%d')}/{name}-{uuid.uuid4().hex[:8]}.jsonl"
 
-    boto3.client("s3", region_name=args.region).put_object(
+    region = args.region or terraform_output("aws_region")
+    boto3.client("s3", region_name=region).put_object(
         Bucket=bucket, Key=key, Body=body.encode("utf-8"), ContentType="application/x-ndjson",
         Metadata={"scenario": name, "triggered-by": "cli"},
     )
