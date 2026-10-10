@@ -20,7 +20,7 @@ Useful outputs after `apply`:
 
 ```bash
 terraform output dashboard_url
-terraform output -raw frontend_env      # paste into frontend/.env.local for local development
+terraform output -raw frontend_env > ../../frontend/.env.aws.local   # then: npm run dev:aws
 ```
 
 `enable_dashboard_hosting=false` skips CloudFront if you only want the backend.

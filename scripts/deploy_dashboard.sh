@@ -11,9 +11,9 @@ BUCKET="$(out dashboard_bucket)"
 DISTRIBUTION="$(out dashboard_distribution_id)"
 
 echo "Building dashboard for $(out api_gateway_endpoint)"
-terraform -chdir="$TF" output -raw frontend_env > "$ROOT/frontend/.env.production.local"
+terraform -chdir="$TF" output -raw frontend_env > "$ROOT/frontend/.env.aws.local"
 npm --prefix "$ROOT/frontend" ci --silent
-npm --prefix "$ROOT/frontend" run build
+npm --prefix "$ROOT/frontend" run build:aws
 
 echo "Uploading to s3://$BUCKET"
 aws s3 sync "$ROOT/frontend/dist" "s3://$BUCKET" --delete \
@@ -22,3 +22,5 @@ aws s3 cp "$ROOT/frontend/dist/index.html" "s3://$BUCKET/index.html" --cache-con
 
 aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths "/index.html" >/dev/null
 echo "Done: $(out dashboard_url)"
+# Leave frontend/dist as the offline build, so the emulator keeps serving the local dashboard.
+npm --prefix "$ROOT/frontend" run build >/dev/null

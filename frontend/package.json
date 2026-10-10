@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:aws": "vite --mode aws",
     "build": "vite build",
+    "build:aws": "vite build --mode aws",
     "lint": "oxlint",
     "preview": "vite preview"
   },

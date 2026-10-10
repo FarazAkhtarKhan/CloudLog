@@ -1,5 +1,6 @@
 // "local" talks to the offline emulator; "aws" talks to API Gateway + Cognito.
-export const MODE = import.meta.env.VITE_MODE === "aws" ? "aws" : "local";
+// `npm run dev:aws` / `build:aws` select AWS and load settings from frontend/.env.aws.local.
+export const MODE = import.meta.env.MODE === "aws" || import.meta.env.VITE_MODE === "aws" ? "aws" : "local";
 
 export const API_BASE_URL = MODE === "aws" ? (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "") : "";
 export const AWS_REGION = import.meta.env.VITE_AWS_REGION || "ap-south-1";

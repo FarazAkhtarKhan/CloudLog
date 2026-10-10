@@ -233,11 +233,14 @@ S3 bucket names are made globally unique with a random suffix, so two people dep
 
 ### 3. Run the dashboard
 
+The dashboard has two modes. `npm run dev` always uses the offline emulator; `npm run dev:aws` uses your
+AWS stack, with settings from `frontend/.env.aws.local`. Switching never needs a file edit.
+
 **Locally, against your AWS stack:**
 
 ```bash
-terraform output -raw frontend_env > ../../frontend/.env.local    # still in infrastructure/terraform
-cd ../../frontend && npm run dev                                  # http://localhost:5173
+terraform output -raw frontend_env > ../../frontend/.env.aws.local   # still in infrastructure/terraform
+cd ../../frontend && npm run dev:aws                                 # http://localhost:5173
 ```
 
 **Or publish it** to a public HTTPS URL on CloudFront (run from the project root):
@@ -280,7 +283,8 @@ zero, but destroying the stack when you're done is the only way to be certain.
 | `No valid credential sources found` | Run `aws configure`, or set `AWS_PROFILE` to a profile that exists |
 | `AccessDenied` during apply | The IAM user needs permissions for every service listed in [the Terraform README](infrastructure/terraform/README.md) |
 | `EntityAlreadyExists` / `ResourceInUseException` | A previous CloudLog deploy still exists in this account and region: `terraform destroy` it first |
-| Dashboard says it can't reach the emulator | `frontend/.env.local` is missing `VITE_MODE=aws`; redo the `terraform output -raw frontend_env` step |
+| Dashboard says it can't reach the emulator | You ran `npm run dev`, which is the offline mode. Use `npm run dev:aws` for AWS |
+| Dashboard says it can't reach API Gateway | `frontend/.env.aws.local` is missing or stale; redo the `terraform output -raw frontend_env` step |
 | Sign-in says "Wrong email or password" | Use the demo accounts above exactly; Cognito is case-sensitive |
 
 ---

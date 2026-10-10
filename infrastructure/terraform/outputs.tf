@@ -57,7 +57,7 @@ output "dashboard_url" {
 }
 
 output "frontend_env" {
-  description = "Paste into frontend/.env.local to point the dashboard at this deployment"
+  description = "Write to frontend/.env.aws.local, then run npm run dev:aws"
   value       = <<-EOT
     VITE_MODE=aws
     VITE_API_URL=${aws_apigatewayv2_stage.default.invoke_url}
