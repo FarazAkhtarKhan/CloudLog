@@ -17,20 +17,27 @@ async function request(path, { method = "GET", body, query } = {}) {
   const params = new URLSearchParams(Object.entries(query || {}).filter(([, v]) => v !== undefined && v !== ""));
   const url = `${API_BASE_URL}${path}${params.size ? `?${params}` : ""}`;
 
+  const unreachable = () => new ApiError(0, MODE === "local"
+    ? "Can't reach the emulator on port 8000. Start it in another terminal: "
+      + ".venv/bin/python -m backend.local.emulator --seed (or use npm run dev:aws for your AWS stack)"
+    : "Can't reach API Gateway. Check VITE_API_URL in frontend/.env.aws.local and your network.");
+
   let response;
   try {
     response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
   } catch {
-    throw new ApiError(0, MODE === "local"
-      ? "Can't reach the emulator. Start it with: python -m backend.local.emulator"
-      : "Can't reach API Gateway. Check VITE_API_URL and your network.");
+    throw unreachable();
   }
   if (response.status === 401) {
     signOut();
     window.location.reload();
   }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(response.status, data.error || data.message || `Request failed (${response.status})`);
+  const data = await response.json().catch(() => null);
+  // The Vite dev proxy answers 502/504 with no JSON body when the emulator isn't running.
+  if (!data && [502, 503, 504].includes(response.status)) throw unreachable();
+  if (!response.ok) {
+    throw new ApiError(response.status, data?.error || data?.message || `Request failed (${response.status})`);
+  }
   return data;
 }
 
