@@ -262,6 +262,17 @@ A new terminal window starts without the variable, so set it again there. If you
 put it in front of each command instead, for example `AWS_PROFILE=cloudlog terraform apply`. For Terraform
 only, `-var aws_profile=cloudlog` also works.
 
+To make it permanent, so every new terminal already has it:
+
+| Shell | Make permanent | Undo |
+| --- | --- | --- |
+| bash | add `export AWS_PROFILE=cloudlog` to `~/.bashrc` | delete that line |
+| zsh | add `export AWS_PROFILE=cloudlog` to `~/.zshrc` | delete that line |
+| fish | `set -Ux AWS_PROFILE cloudlog` | `set -Ue AWS_PROFILE` |
+| PowerShell | `setx AWS_PROFILE cloudlog` (applies to windows opened afterwards) | `[Environment]::SetEnvironmentVariable("AWS_PROFILE", $null, "User")` |
+
+Only do this if it is the only AWS profile you use: every AWS command on your machine will then use it.
+
 **Which commands need the profile:**
 
 | Needs AWS credentials (set `AWS_PROFILE` first) | Doesn't need them |
