@@ -1,7 +1,7 @@
-import PipelineMap from "../components/PipelineMap";
+import LiveModel from "../components/LiveModel";
 import SignalChart from "../components/SignalChart";
 import { Empty, ErrorNotice, Panel, Sev } from "../components/ui";
-import { ago, fileName, minutes, ms, number, plural } from "../lib/format";
+import { ago, minutes, number, plural } from "../lib/format";
 import { useLive } from "../lib/hooks";
 
 function Vital({ value, label, alarm }) {
@@ -36,17 +36,7 @@ export default function Overview({ onOpenIncident }) {
         title="Pipeline"
         aside={latestRun ? `Last file processed ${ago(latestRun.finished_at)}` : "Run a simulation to send the first log file"}
       >
-        <PipelineMap run={latestRun} session={session} />
-        {latestRun && (
-          <div className="map-caption">
-            <span className="mono">{fileName(latestRun.s3_key)}</span>
-            <span>{latestRun.stored} stored</span>
-            <span>{latestRun.rejected} rejected</span>
-            <span>{plural(latestRun.detections?.length || 0, "incident")} opened or updated</span>
-            <span>{plural(latestRun.alerts?.length || 0, "SNS alert")}</span>
-            <span>{ms(latestRun.duration_ms)} in Lambda</span>
-          </div>
-        )}
+        <LiveModel run={latestRun} session={session} />
       </Panel>
 
       <div className="grid grid-2-1">

@@ -14,6 +14,8 @@ const RULE_NAMES = {
   "warning-burst": "Warning burst",
 };
 
+const LIFECYCLE = ["OPEN", "ACKNOWLEDGED", "RESOLVED"];
+
 export default function IncidentDrawer({ id, onClose, onChanged }) {
   const { session, live } = useLive();
   const toast = useToast();
@@ -46,6 +48,7 @@ export default function IncidentDrawer({ id, onClose, onChanged }) {
   }
 
   const inc = data?.incident;
+  const stage = LIFECYCLE.indexOf(inc?.status);
   return (
     <>
       <div className="scrim" onClick={onClose} />
@@ -53,7 +56,6 @@ export default function IncidentDrawer({ id, onClose, onChanged }) {
         <div className="drawer-head">
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {inc && <Sev level={inc.severity} />}
-            {inc && <Status value={inc.status} />}
             {inc?.escalated && <span className="chip">Escalated</span>}
             {inc?.reopen_count > 0 && <span className="chip">Reopened {inc.reopen_count}×</span>}
             <button type="button" className="btn btn-quiet btn-sm" style={{ marginLeft: "auto" }} onClick={onClose} aria-label="Close">
@@ -61,6 +63,15 @@ export default function IncidentDrawer({ id, onClose, onChanged }) {
             </button>
           </div>
           <h2 id="drawer-title">{inc ? inc.title : "Loading incident…"}</h2>
+          {inc && (
+            <ol className="lifecycle" aria-label="Incident progress">
+              {LIFECYCLE.map((s, i) => (
+                <li key={s} className={i < stage ? "done" : i === stage ? "now" : ""} aria-current={i === stage ? "step" : undefined}>
+                  <Status value={s} />
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
         <ErrorNotice error={error} />
         {inc && (
