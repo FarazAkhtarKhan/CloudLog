@@ -1,8 +1,9 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment, useState } from "react";
-import PipelineMap from "../components/PipelineMap";
+import LiveModel from "../components/LiveModel";
 import { Empty, ErrorNotice, Panel, Sev, Status } from "../components/ui";
 import { MODE } from "../config";
+import { PARTS } from "../lib/architecture";
 import { clock, fileName, ms } from "../lib/format";
 import { useLive } from "../lib/hooks";
 
@@ -14,16 +15,7 @@ const STAGES = [
   { key: "alert_ms", label: "Publish SNS", color: "#c8102e" },
 ];
 
-const COMPONENTS = [
-  { name: "Amazon S3", role: "Raw log bucket", text: "Services drop JSON Lines files here. Every new .jsonl object emits an ObjectCreated event. Encrypted at rest, public access blocked." },
-  { name: "AWS Lambda", role: "Log processor", text: "Runs once per file, scales out automatically per upload. Validates each line, masks personal data, stores events and applies the detection rules." },
-  { name: "Amazon DynamoDB", role: "Three on-demand tables", text: "Events (partitioned by service, plus a per-day feed index), incidents (indexed by status) and pipeline runs. TTL deletes old data for free." },
-  { name: "Amazon SNS", role: "Critical alert topic", text: "Fans one message out to every subscriber (email, SMS, HTTPS) when an incident is critical, escalated or comes back." },
-  { name: "API Gateway + Cognito", role: "HTTP API with JWT authorizer", text: "Verifies the sign-in token at the edge before any Lambda runs. Cognito groups map to Admin, Analyst and Viewer roles." },
-  { name: "AWS Lambda", role: "API handler", text: "Serves the dashboard, enforces role permissions and computes the statistics with a map, shuffle and reduce pass." },
-  { name: "Amazon SQS", role: "Dead-letter queue", text: "If the processor still fails after Lambda's automatic retries, the S3 event is parked here instead of being lost." },
-  { name: "Amazon CloudWatch", role: "Logs and alarms", text: "Captures both functions' logs and raises an alarm to SNS when the processor reports errors or the DLQ fills up." },
-];
+const COMPONENTS = Object.values(PARTS).filter((p) => p.listed);
 
 function RunDetail({ run }) {
   const total = STAGES.reduce((s, st) => s + (run.stages?.[st.key] || 0), 0) || 1;
@@ -92,7 +84,7 @@ export default function Pipeline() {
   return (
     <div className="stack">
       <Panel title="Architecture" aside={MODE === "aws" ? "Live AWS deployment" : "Running in the offline emulator"}>
-        <PipelineMap run={latestRun} session={session} />
+        <LiveModel run={latestRun} session={session} />
       </Panel>
 
       <Panel title="Processed files" aside="One row per Lambda invocation, newest first">

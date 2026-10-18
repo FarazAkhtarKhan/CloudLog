@@ -1,6 +1,7 @@
 import { Play, RotateCcw, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "../lib/toast";
+import LiveModel from "../components/LiveModel";
 import { Empty, ErrorNotice, Panel, Sev } from "../components/ui";
 import { LEVELS } from "../config";
 import { api } from "../lib/api";
@@ -114,7 +115,7 @@ function FileView({ upload, run }) {
 }
 
 export default function Simulator() {
-  const { session, refresh } = useLive();
+  const { session, refresh, latestRun } = useLive();
   const toast = useToast();
   const canRun = session.role !== "Viewer";
   const { data: catalog } = usePoll(() => api.scenarios(), [], null);
@@ -125,7 +126,7 @@ export default function Simulator() {
   const [error, setError] = useState(null);
   const [custom, setCustom] = useState({ service: "checkout-api", level: "ERROR", message: "Unhandled NullPointerException in CartController", error_code: "CART_NPE", repeat: 1 });
   const { run, timedOut } = useTrace(upload);
-  const traceRef = useRef(null);
+  const modelRef = useRef(null);
   const reported = useRef(null);
 
   useEffect(() => {
@@ -142,7 +143,7 @@ export default function Simulator() {
     try {
       const result = await api.simulate(body);
       setUpload(result);
-      traceRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      modelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) {
       setError(e);
     } finally {
@@ -166,6 +167,11 @@ export default function Simulator() {
     <div className="stack">
       {!canRun && <div className="notice notice-info">You are signed in as a Viewer. Sign in as an Analyst or Admin to run scenarios.</div>}
       <ErrorNotice error={error} />
+      <div ref={modelRef} className="scroll-target">
+        <Panel title="Watch it happen" aside={upload ? (run ? "Processed" : timedOut ? "No response" : "In progress") : "Run a scenario below"}>
+          <LiveModel run={upload ? run : latestRun} pending={upload && !run ? upload : null} session={session} />
+        </Panel>
+      </div>
       <div className="sim-layout">
         <div className="stack">
           <Panel title="Failure scenarios" aside="Each one uploads a real log file to S3">
@@ -208,7 +214,7 @@ export default function Simulator() {
           </Panel>
         </div>
 
-        <div className="stack" ref={traceRef}>
+        <div className="stack">
           <Panel title="Follow the file" aside={upload ? (run ? "Processed" : timedOut ? "No response" : "In progress") : ""}>
             <Trace upload={upload} run={run} timedOut={timedOut} />
           </Panel>

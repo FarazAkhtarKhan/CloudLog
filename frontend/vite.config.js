@@ -8,6 +8,8 @@ const target = process.env.CLOUDLOG_API || 'http://127.0.0.1:8000'
 
 export default defineConfig({
   plugins: [react()],
+  // three.js (the 3D pipeline model) is ~590 kB on its own; it is lazy-loaded, never in the first page load.
+  build: { chunkSizeWarningLimit: 650 },
   server: {
     proxy: Object.fromEntries(API_PATHS.map((p) => [p, { target, changeOrigin: true }])),
   },

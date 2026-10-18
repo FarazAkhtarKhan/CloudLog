@@ -83,10 +83,11 @@ Sign in by choosing a role. **Analyst** is the best role for a demo; **Viewer** 
 ## Five-minute demo script
 
 1. **Sign in as Analyst.** Point out the role chip: permissions come from Cognito groups and are enforced by the API.
-2. **Overview.** The pipeline map is the architecture, live. Each node shows what happened to the last file.
-3. **Simulator → Database outage → Run.** Follow the file: uploaded to S3, Lambda invoked, lines stored,
-   rules applied, SNS alert published. Switch to Overview and the packet travels the map; the critical
-   path turns red.
+2. **Overview.** The 3D pipeline model is the architecture, live. Each part shows what happened to the last
+   file; drag to turn it, and click any part to read what it does.
+3. **Simulator → Database outage → Run.** Watch it happen: the log lines drop into S3, hop to the Lambda,
+   invalid ones fall away, the rest go into DynamoDB, and the alert arcs to SNS and pages on-call. The step
+   track under the model says what is happening at each moment; **Replay** plays it again.
 4. **Incidents.** Seven log lines became four incidents, not seven tickets. Open the critical one: the
    timeline shows *opened → alerted*. Acknowledge it with a note, then resolve it.
 5. **Simulator → Payment timeouts → Run twice.** The second run pushes the incident past five occurrences

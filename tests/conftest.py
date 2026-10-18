@@ -1,5 +1,6 @@
 """Shared fixtures. Every AWS call in the suite goes to moto's in-memory emulation."""
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import boto3
@@ -53,6 +54,10 @@ def jsonl(*lines) -> str:
     return "\n".join(line if isinstance(line, str) else json.dumps(line) for line in lines) + "\n"
 
 
-def log(level="INFO", service="order-service", message="Order created", ts="2026-10-10T10:00:00Z", **extra):
+# Recent, so stored events fall inside the feed's look-back window (EVENT_TTL_DAYS) whenever the suite runs.
+RECENT = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log(level="INFO", service="order-service", message="Order created", ts=RECENT, **extra):
     return {"timestamp": ts, "service": service, "level": level, "message": message, **extra}
 
